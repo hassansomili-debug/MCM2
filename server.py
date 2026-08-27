@@ -77,6 +77,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS invitations (id INTEGER PRIMARY KEY, organization_id INTEGER NOT NULL, assessment_id INTEGER, email TEXT NOT NULL, role TEXT NOT NULL, token TEXT UNIQUE NOT NULL, status TEXT NOT NULL, expires_at INTEGER NOT NULL, created_by INTEGER NOT NULL, FOREIGN KEY(organization_id) REFERENCES organizations(id), FOREIGN KEY(assessment_id) REFERENCES assessments(id));
     CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, read_at INTEGER, created_at INTEGER NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id));
     CREATE TABLE IF NOT EXISTS user_settings (user_id INTEGER PRIMARY KEY, locale TEXT NOT NULL DEFAULT 'ar', email_notifications INTEGER NOT NULL DEFAULT 1, FOREIGN KEY(user_id) REFERENCES users(id));
+    CREATE TABLE IF NOT EXISTS participant_sessions (token TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, assessment_id INTEGER NOT NULL, expires_at INTEGER NOT NULL, FOREIGN KEY(assessment_id) REFERENCES assessments(id));
     """)
     if not db.execute("SELECT 1 FROM organizations LIMIT 1").fetchone():
         db.execute("INSERT INTO organizations(name) VALUES (?)", ("أفق الرقمية",))
@@ -157,6 +158,28 @@ class API(BaseHTTPRequestHandler):
         path = self.requested_path()
         data = self.body()
         db = connect()
+        if path == "/api/participant/start":
+            participant_number = int(time.time() * 1000)
+            name = "مشارك مجهول"
+            email = f"anonymous-{participant_number}@participant.local"
+            version = db.execute("SELECT id FROM instrument_versions WHERE status='published' ORDER BY id DESC LIMIT 1").fetchone()
+            assessment = db.execute("INSERT INTO assessments(organization_id,version_id,created_by,status,created_at) VALUES (?,?,?,?,?)", (1, version["id"], 1, "draft", int(time.time())))
+            token = secrets.token_urlsafe(32)
+            db.execute("INSERT INTO participant_sessions VALUES (?,?,?,?,?)", (token, name, email, assessment.lastrowid, int(time.time()) + 7 * 86_400))
+            db.commit(); db.close(); return self.send_json({"token": token, "assessment_id": assessment.lastrowid}, 201)
+        if path.startswith("/api/participant/session/") and path.endswith("/answers"):
+            token = path.split("/")[4]
+            session = db.execute("SELECT * FROM participant_sessions WHERE token=? AND expires_at>?", (token, int(time.time()))).fetchone()
+            if not session: db.close(); return self.send_json({"error": "participant_session_invalid"}, 401)
+            assessment = db.execute("SELECT version_id FROM assessments WHERE id=?", (session["assessment_id"],)).fetchone()
+            now = int(time.time())
+            for answer in data.get("answers", []):
+                value = float(answer["value"])
+                item = db.execute("SELECT id FROM items WHERE id=? AND version_id=?", (answer["item_id"], assessment["version_id"])).fetchone()
+                if not item or value < 0 or value > 5:
+                    db.close(); return self.send_json({"error": "invalid_answer"}, 422)
+                db.execute("INSERT INTO answers VALUES (?,?,?,?) ON CONFLICT(assessment_id,item_id) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", (session["assessment_id"], answer["item_id"], value, now))
+            db.commit(); db.close(); return self.send_json({"saved": len(data.get("answers", [])), "saved_at": now})
         if path == "/api/auth/login":
             user = db.execute("SELECT * FROM users WHERE email=?", (data.get("email", ""),)).fetchone()
             if not user or not verify_password(data.get("password", ""), user["password_hash"]):
@@ -300,6 +323,15 @@ class API(BaseHTTPRequestHandler):
                 content_type = "text/html; charset=utf-8" if file_path.suffix == ".html" else "text/css; charset=utf-8" if file_path.suffix == ".css" else "application/javascript; charset=utf-8"
                 self.send_response(200); self.send_header("Content-Type", content_type); self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload); return
             return self.send_json({"error": "not_found"}, 404)
+        if path.startswith("/api/participant/session/"):
+            token = path.rsplit("/", 1)[-1]
+            db = connect()
+            session = db.execute("SELECT * FROM participant_sessions WHERE token=? AND expires_at>?", (token, int(time.time()))).fetchone()
+            if not session:
+                db.close(); return self.send_json({"error": "participant_session_invalid"}, 401)
+            items = [dict(row) for row in db.execute("SELECT id,code,construct,dimension_code,prompt_ar FROM items WHERE version_id=(SELECT version_id FROM assessments WHERE id=?) ORDER BY id", (session["assessment_id"],))]
+            answers = {row["item_id"]: row["value"] for row in db.execute("SELECT item_id,value FROM answers WHERE assessment_id=?", (session["assessment_id"],))}
+            db.close(); return self.send_json({"name": session["name"], "email": session["email"], "assessment_id": session["assessment_id"], "items": items, "answers": answers})
         if path.startswith("/api/invitations/"):
             token = path.rsplit("/", 1)[-1]
             db = connect()
