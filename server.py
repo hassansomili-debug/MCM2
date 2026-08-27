@@ -35,6 +35,8 @@ SMCE_DIMENSIONS = [
     ("SMCE04", "اتساق الخدمة"),
     ("SMCE05", "التعلم من المجتمع"),
 ]
+PLATFORM_ADMIN_EMAIL = "hmsomili@gmail.com"
+PLATFORM_ADMIN_PASSWORD_HASH = "d69150839d2b0aab796c8b5b51e159f3$741508a73f4e2816d73b385e331bc424fc314de7cfdda31e88b0ebabd3f0b0a6"
 
 
 def connect():
@@ -96,6 +98,13 @@ def init_db():
                     db.execute("INSERT INTO items VALUES (?,?,?,?,?,?)", (item_id, 1, f"{code}-{item_number:02d}", construct, code, f"{name} - بند القياس {item_number}"))
                     item_id += 1
         db.commit()
+    organization = db.execute("SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()
+    admin = db.execute("SELECT id FROM users WHERE email=?", (PLATFORM_ADMIN_EMAIL,)).fetchone()
+    if not admin:
+        cursor = db.execute("INSERT INTO users(email,name,password_hash) VALUES (?,?,?)", (PLATFORM_ADMIN_EMAIL, "مدير منصة نضج MCM", PLATFORM_ADMIN_PASSWORD_HASH))
+        db.execute("INSERT OR REPLACE INTO memberships(user_id,organization_id,role) VALUES (?,?,?)", (cursor.lastrowid, organization["id"], "super_admin"))
+        db.execute("INSERT OR IGNORE INTO user_settings(user_id) VALUES (?)", (cursor.lastrowid,))
+        db.commit()
     db.close()
 
 
@@ -153,8 +162,9 @@ class API(BaseHTTPRequestHandler):
             if not user or not verify_password(data.get("password", ""), user["password_hash"]):
                 db.close(); return self.send_json({"error": "invalid_credentials"}, 401)
             token = secrets.token_urlsafe(32)
+            role = db.execute("SELECT role FROM memberships WHERE user_id=? ORDER BY organization_id LIMIT 1", (user["id"],)).fetchone()["role"]
             db.execute("INSERT INTO sessions VALUES (?,?,?)", (token, user["id"], int(time.time()) + 86_400)); db.commit(); db.close()
-            return self.send_json({"token": token, "user": {"id": user["id"], "name": user["name"], "email": user["email"]}})
+            return self.send_json({"token": token, "user": {"id": user["id"], "name": user["name"], "email": user["email"], "role": role}})
         user = self.require_user()
         if not user: db.close(); return
         if path == "/api/assessments":
@@ -249,6 +259,26 @@ class API(BaseHTTPRequestHandler):
                 db.close(); return self.send_json({"error": "unsupported_locale"}, 422)
             db.execute("INSERT INTO user_settings(user_id,locale,email_notifications) VALUES (?,?,?) ON CONFLICT(user_id) DO UPDATE SET locale=excluded.locale,email_notifications=excluded.email_notifications", (user["id"], locale, int(bool(data.get("email_notifications", True)))))
             db.commit(); db.close(); return self.send_json({"locale": locale, "email_notifications": bool(data.get("email_notifications", True))})
+        if path == "/api/admin/users":
+            if user["role"] != "super_admin":
+                db.close(); return self.send_json({"error": "permission_denied"}, 403)
+            email = str(data.get("email", "")).strip().lower()
+            name = str(data.get("name", "")).strip()
+            password = str(data.get("password", ""))
+            role = str(data.get("role", "company_respondent")).strip().lower()
+            roles = {"company_respondent", "company_admin", "consultant", "researcher", "super_admin"}
+            if "@" not in email or not name or len(password) < 8 or role not in roles:
+                db.close(); return self.send_json({"error": "invalid_user_data"}, 422)
+            organization_id = data.get("organization_id") or user["organization_id"]
+            if not db.execute("SELECT 1 FROM organizations WHERE id=?", (organization_id,)).fetchone():
+                db.close(); return self.send_json({"error": "organization_not_found"}, 404)
+            if db.execute("SELECT 1 FROM users WHERE email=?", (email,)).fetchone():
+                db.close(); return self.send_json({"error": "email_already_exists"}, 409)
+            cursor = db.execute("INSERT INTO users(email,name,password_hash) VALUES (?,?,?)", (email, name, password_hash(password)))
+            db.execute("INSERT INTO memberships(user_id,organization_id,role) VALUES (?,?,?)", (cursor.lastrowid, organization_id, role))
+            db.execute("INSERT INTO user_settings(user_id) VALUES (?)", (cursor.lastrowid,))
+            db.execute("INSERT INTO audit_logs(user_id,action,entity,entity_id,created_at) VALUES (?,?,?,?,?)", (user["id"], "create", "user", cursor.lastrowid, int(time.time())))
+            db.commit(); db.close(); return self.send_json({"id": cursor.lastrowid, "email": email, "name": name, "role": role}, 201)
         db.close(); self.send_json({"error": "route_not_found"}, 404)
 
     def assessment_payload(self, assessment_id, organization_id):
@@ -275,6 +305,10 @@ class API(BaseHTTPRequestHandler):
         db = connect()
         if path == "/api/me":
             result = {"id": user["id"], "name": user["name"], "email": user["email"], "role": user["role"], "organization": user["organization_id"]}
+        elif path == "/api/admin/users":
+            if user["role"] != "super_admin":
+                db.close(); return self.send_json({"error": "permission_denied"}, 403)
+            result = {"users": [dict(row) for row in db.execute("SELECT u.id,u.name,u.email,m.role,m.organization_id FROM users u LEFT JOIN memberships m ON m.user_id=u.id ORDER BY u.id") ]}
         elif path == "/api/organizations":
             result = {"organizations": [dict(row) for row in db.execute("SELECT o.id,o.name,o.locale,m.role FROM organizations o JOIN memberships m ON m.organization_id=o.id WHERE m.user_id=?", (user["id"],))]}
         elif path == "/api/notifications":
