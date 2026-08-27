@@ -104,11 +104,18 @@ def json_bytes(value):
 
 
 class API(BaseHTTPRequestHandler):
+    def requested_path(self):
+        parsed = urlparse(self.path)
+        routed_path = parse_qs(parsed.query).get("route", [""])[0]
+        return f"/api{routed_path}" if routed_path else parsed.path
+
     def send_json(self, value, status=200):
         payload = json_bytes(value)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -130,8 +137,15 @@ class API(BaseHTTPRequestHandler):
             self.send_json({"error": "authentication_required"}, 401)
         return user
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.end_headers()
+
     def do_POST(self):
-        path = urlparse(self.path).path
+        path = self.requested_path()
         data = self.body()
         db = connect()
         if path == "/api/auth/login":
@@ -248,7 +262,7 @@ class API(BaseHTTPRequestHandler):
         return {"assessment": dict(assessment), "scores": grouped, "answers": answers}
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        path = self.requested_path()
         if not path.startswith("/api/"):
             file_path = ROOT / ("index.html" if path in ("", "/") else path.lstrip("/"))
             if file_path.is_file() and file_path.parent == ROOT:
