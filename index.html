@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="نضج MCM - منصة قياس النضج الاتصالي التسويقي" />
+  <title>نضج MCM | لوحة القياس</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">ن</span><div><strong>نضج MCM</strong><small>MARKETING COMMUNICATION MATURITY</small></div></div>
+      <div class="workspace-label">مساحة العمل</div>
+      <button class="org-switcher"><span class="org-avatar">أ</span><span><b>أفق الرقمية</b><small>الحساب المؤسسي</small></span><span class="chevron">⌄</span></button>
+      <nav class="main-nav" aria-label="التنقل الرئيسي">
+        <a class="nav-item active" href="#overview" data-view="overview"><span class="nav-icon">◈</span>نظرة عامة</a>
+        <a class="nav-item" href="#assessment" data-view="assessment"><span class="nav-icon">◌</span>التقييمات</a>
+        <a class="nav-item" href="#roadmap" data-view="roadmap"><span class="nav-icon">↗</span>خارطة التحسين</a>
+        <a class="nav-item" href="#reports" data-view="reports"><span class="nav-icon">▤</span>التقارير</a>
+      </nav>
+      <div class="sidebar-rule"></div>
+      <div class="workspace-label">البحث والتحليل</div>
+      <nav class="main-nav">
+        <a class="nav-item researcher-link" href="#researcher" data-view="researcher"><span class="nav-icon">⌁</span>مساحة الباحث <span class="beta">BETA</span></a>
+        <a class="nav-item" href="#methodology" data-view="methodology"><span class="nav-icon">ⓘ</span>المنهجية</a>
+      </nav>
+      <div class="sidebar-bottom"><div class="status-dot"></div><span>النسخة البحثية 0.1</span><button class="icon-button" aria-label="الإعدادات">⚙</button></div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar"><div class="breadcrumb"><span>مساحة العمل</span><b>/</b><strong id="page-label">نظرة عامة</strong></div><div class="top-actions"><button class="icon-button" aria-label="الإشعارات">♧<i></i></button><div class="user-chip"><span class="user-avatar">س</span><span>سارة الحربي</span><span class="chevron">⌄</span></div></div></header>
+      <div id="app-view">
+        <section class="page-heading"><div><div class="eyebrow">تقرير القياس الأخير <span>•</span> ١٤ أغسطس ٢٠٢٦</div><h1>صباح الخير، سارة</h1><p>هذه صورة واضحة عن نضج الاتصال التسويقي في <strong>أفق الرقمية</strong>.</p></div><button class="primary-button" id="new-assessment"><span>＋</span> تقييم جديد</button></section>
+
+        <section class="hero-grid">
+          <article class="score-panel"><div class="panel-kicker">الدرجة الكلية <span class="info">i</span></div><div class="score-row"><div class="score-number">72<span>/100</span></div><div class="level-badge"><span></span> نضج متطور</div></div><div class="score-meta"><span>مقارنة بالتقييم السابق</span><strong>+11 نقطة <em>↗</em></strong></div><div class="score-bar"><span></span></div><div class="score-scale"><span>ناشئ</span><span>متطور</span><span>مؤسسي</span></div></article>
+          <article class="insight-panel"><div class="panel-title"><span>القراءة التنفيذية</span><button class="more-button">•••</button></div><div class="insight-content"><div class="insight-symbol">✦</div><p>لديكم <strong>توجه استراتيجي واضح</strong>، لكن توجد فجوة بين القرار والبنية المعلوماتية التي تنفذه. الأولوية التالية: توحيد مصادر الحقيقة وتفعيل دورة تحديث المحتوى.</p></div><a href="#diagnosis" class="text-link">قراءة التشخيص العميق <span>←</span></a></article>
+          <article class="next-panel"><div class="panel-title"><span>الخطوة التالية</span><span class="step-count">٠٢ <small>/ ٠٣</small></span></div><div class="next-icon">✓</div><h3>شارك التقييم مع فريقك</h3><p>أضف زملاء من التسويق والمنتج للحصول على صورة أدق.</p><button class="outline-button">إضافة مشاركين <span>←</span></button><div class="completion"><span>اكتمل ملف الشركة</span><b>١٠٠٪</b></div></article>
+        </section>
+
+        <section class="section-block"><div class="section-heading"><div><h2>أبعاد النضج الاتصالي</h2><p>كيف تتوزع قدرتكم المؤسسية عبر الأبعاد السبعة؟</p></div><button class="filter-button">آخر تقييم <span>⌄</span></button></div><div class="dimensions-grid" id="dimensions"></div></section>
+
+        <section class="lower-grid"><article class="chart-panel"><div class="section-heading compact"><div><h2>مسار النضج</h2><p>تطور الدرجة الكلية عبر التقييمات</p></div><button class="filter-button">آخر ١٢ شهرًا <span>⌄</span></button></div><div class="chart-wrap"><div class="chart-y"><span>100</span><span>75</span><span>50</span><span>25</span><span>0</span></div><div class="chart"><div class="grid-line l1"></div><div class="grid-line l2"></div><div class="grid-line l3"></div><div class="grid-line l4"></div><svg viewBox="0 0 680 210" preserveAspectRatio="none" aria-label="رسم مسار النضج"><defs><linearGradient id="area" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#18a999" stop-opacity=".25"/><stop offset="1" stop-color="#18a999" stop-opacity="0"/></linearGradient></defs><path class="area" d="M0,151 C100,143 130,136 185,142 S270,127 332,114 S420,111 460,90 S535,85 680,62 L680,210 L0,210 Z"/><path class="line" d="M0,151 C100,143 130,136 185,142 S270,127 332,114 S420,111 460,90 S535,85 680,62"/><circle cx="680" cy="62" r="5"/><g class="chart-tip"><rect x="590" y="10" width="72" height="34" rx="5"/><text x="626" y="32">72 نقطة</text></g></svg><div class="chart-x"><span>أغسطس ٢٠٢٥</span><span>نوفمبر ٢٠٢٥</span><span>فبراير ٢٠٢٦</span><span>مايو ٢٠٢٦</span><span>أغسطس ٢٠٢٦</span></div></div></div></article><article class="smce-panel"><div class="section-heading compact"><div><h2>كفاءة التواصل الاجتماعي <span class="tag">SMCE</span></h2><p>نتيجة مستقلة عن درجة MCM</p></div><button class="more-button">•••</button></div><div class="smce-score"><div class="ring"><div><strong>64</strong><small>/ 100</small></div></div><div><div class="level-badge warning"><span></span> يحتاج تطويرًا</div><p>النتيجة جيدة، لكن سرعة الاستجابة لا تزال تؤثر على التجربة.</p></div></div><div class="mini-stats"><div><span>الاستجابة والحل</span><b>58</b></div><div><span>جودة التفاعل</span><b>71</b></div><div><span>كفاءة الفعل</span><b>63</b></div></div></article></section>
+
+        <section class="section-block priorities"><div class="section-heading"><div><h2>أولويات التطوير</h2><p>فجوات مرتبة حسب الأثر والأهمية والاعتمادية</p></div><a href="#roadmap" class="text-link">عرض الخارطة كاملة <span>←</span></a></div><div class="priority-table"><div class="table-head"><span>الأولوية</span><span>البعد</span><span>الفجوة</span><span>الأثر المتوقع</span><span>المالك</span><span></span></div><div class="table-row"><span class="priority-number">01</span><strong>MCM03 <small>حوكمة المعلومات والنزاهة</small></strong><span class="gap high">−٢٨</span><span><span class="impact-bar"><i style="width:88%"></i></span>مرتفع</span><span>التسويق + المنتج</span><button class="row-arrow">←</button></div><div class="table-row"><span class="priority-number">02</span><strong>MCM07 <small>المأسسة وقابلية التوسع</small></strong><span class="gap medium">−٢١</span><span><span class="impact-bar"><i style="width:69%"></i></span>متوسط</span><span>العمليات</span><button class="row-arrow">←</button></div><div class="table-row"><span class="priority-number">03</span><strong>MCM04 <small>التنسيق ورحلة العميل</small></strong><span class="gap low">−١٦</span><span><span class="impact-bar"><i style="width:53%"></i></span>متوسط</span><span>مدير التجربة</span><button class="row-arrow">←</button></div></div></section>
+      </div>
+      <footer class="footer"><span>© ٢٠٢٦ نضج MCM</span><span>Research Beta / Provisional Model</span></footer>
+    </main>
+  </div>
+  <div class="toast" id="toast">تم حفظ طلبك بنجاح</div>
+  <script src="app.js"></script>
+</body>
+</html>
