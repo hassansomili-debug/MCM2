@@ -250,7 +250,7 @@ class API(BaseHTTPRequestHandler):
             token = secrets.token_urlsafe(24); expires_at = int(time.time()) + 7 * 86_400
             cursor = db.execute("INSERT INTO invitations(organization_id,assessment_id,email,role,token,status,expires_at,created_by) VALUES (?,?,?,?,?,?,?,?)", (user["organization_id"], data.get("assessment_id"), email, data.get("role", "respondent"), token, "pending", expires_at, user["id"]))
             db.execute("INSERT INTO audit_logs(user_id,action,entity,entity_id,created_at) VALUES (?,?,?,?,?)", (user["id"], "invite", "invitation", cursor.lastrowid, int(time.time())))
-            db.commit(); db.close(); return self.send_json({"id": cursor.lastrowid, "email": email, "status": "pending", "expires_at": expires_at}, 201)
+            db.commit(); db.close(); return self.send_json({"id": cursor.lastrowid, "email": email, "status": "pending", "expires_at": expires_at, "participant_url": f"/#participant?token={token}"}, 201)
         if path == "/api/notifications/read":
             db.execute("UPDATE notifications SET read_at=? WHERE user_id=? AND read_at IS NULL", (int(time.time()), user["id"])); db.commit(); db.close(); return self.send_json({"marked_read": True})
         if path == "/api/settings":
@@ -300,6 +300,14 @@ class API(BaseHTTPRequestHandler):
                 content_type = "text/html; charset=utf-8" if file_path.suffix == ".html" else "text/css; charset=utf-8" if file_path.suffix == ".css" else "application/javascript; charset=utf-8"
                 self.send_response(200); self.send_header("Content-Type", content_type); self.send_header("Content-Length", str(len(payload))); self.end_headers(); self.wfile.write(payload); return
             return self.send_json({"error": "not_found"}, 404)
+        if path.startswith("/api/invitations/"):
+            token = path.rsplit("/", 1)[-1]
+            db = connect()
+            invitation = db.execute("SELECT email,role,status,expires_at FROM invitations WHERE token=?", (token,)).fetchone()
+            db.close()
+            if not invitation or invitation["expires_at"] < int(time.time()) or invitation["status"] != "pending":
+                return self.send_json({"error": "invitation_invalid"}, 404)
+            return self.send_json(dict(invitation))
         user = self.require_user()
         if not user: return
         db = connect()
