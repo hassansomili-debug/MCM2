@@ -62,7 +62,10 @@ class HybridRow(Mapping):
 
 
 def hybrid_row_factory(cursor):
-    names = tuple(column.name for column in cursor.description)
+    # DDL and other statements without a result set report `description` as
+    # None. psycopg still builds a row maker, so tolerate the empty case.
+    description = cursor.description
+    names = tuple(column.name for column in description) if description else ()
 
     def make_row(values):
         return HybridRow(names, tuple(values))

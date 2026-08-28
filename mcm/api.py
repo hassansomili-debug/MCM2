@@ -283,7 +283,7 @@ class API(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/public-config":
             return self.send_json({
                 "registration_enabled": config.ALLOW_REGISTRATION,
-                "direct_participant_enabled": True,
+                "direct_participant_enabled": not config.EPHEMERAL_STORAGE,
                 "platform_name": "مقياس النضج الاتصالي التسويقي",
                 "storage": config.STORAGE_MODE,
                 "notice": "بيئة عرض مؤقتة؛ لا تستخدم بيانات حقيقية." if config.EPHEMERAL_STORAGE else None,
@@ -295,6 +295,8 @@ class API(BaseHTTPRequestHandler):
                 },
             })
         if method == "POST" and path == "/api/public/assessments":
+            if config.EPHEMERAL_STORAGE:
+                raise APIError("durable_storage_required", 503)
             return self._public_assessment(data)
         if path.startswith("/api/auth/"):
             return self._auth(method, path, data)
