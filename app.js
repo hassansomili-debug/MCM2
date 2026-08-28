@@ -195,7 +195,7 @@ function scrollElementIntoView(element, block = 'start') {
 
 function renderLanding() {
   const storageNotice = state.publicConfig.storage === 'ephemeral-demo' ? `<div class="landing-alert"><strong>نسخة عرض مؤقتة</strong><span>${e(state.publicConfig.notice || 'قد تُعاد تهيئة البيانات؛ لا تدخل بيانات حساسة.')}</span></div>` : '';
-  const mcmDimensions = ['الحوكمة والتوجيه','ذكاء أصحاب المصلحة','نزاهة المعلومات','تنسيق رحلة العميل','مواءمة الوعد والتجربة','الأدلة والتعلّم','المأسسة والتوسع'];
+  const mcmDimensions = ['الحوكمة والتوجيه','ذكاء أصحاب المصلحة','نزاهة المعلومات','تنسيق رحلة العميل','مواءمة الوعد والتجربة','الأدلة والتعلّم','الاستدامة والتوسع'];
   const smceDimensions = ['الاستجابة والحل','المعنى والتفاعل','كفاءة الفعل','انخفاض الاحتكاك','كفاءة الموارد والأهداف'];
   const stages = [
     {number:'١',label:'عشوائي',copy:'ممارسات متفرقة وردود فعل تعتمد على الاجتهاد الفردي.'},
@@ -608,7 +608,7 @@ async function renderSettings() {
 }
 
 function renderMethodology() {
-  const mcm = ['MCM01 الحوكمة والتوجيه الاستراتيجي','MCM02 ذكاء أصحاب المصلحة والسياق','MCM03 حوكمة المعلومات والنزاهة','MCM04 التنسيق التنظيمي ورحلة العميل','MCM05 مواءمة الوعد والتجربة','MCM06 الأدلة والتعلم التكيفي','MCM07 المأسسة وقابلية التوسع'];
+  const mcm = ['MCM01 الحوكمة والتوجيه الاستراتيجي','MCM02 ذكاء أصحاب المصلحة والسياق','MCM03 حوكمة المعلومات والنزاهة','MCM04 التنسيق التنظيمي ورحلة العميل','MCM05 مواءمة الوعد والتجربة','MCM06 الأدلة والتعلم التكيفي','MCM07 الاستدامة وقابلية التوسع'];
   const smce = ['SMCE01 كفاءة الاستجابة والحل','SMCE02 جودة المعنى والتفاعل','SMCE03 كفاءة الانتقال إلى الفعل','SMCE04 انخفاض الاحتكاك الاتصالي','SMCE05 كفاءة الموارد وتحقيق الأهداف'];
   appView.innerHTML = `<div class="page">${pageHeading('المعرفة · المنهجية','كيف يعمل مقياس النضج الاتصالي التسويقي','فصل واضح بين السياق، القدرة المؤسسية، والكفاءة الاتصالية الناتجة.')}${researchNotice()}<div class="card-grid"><article class="card span-4"><span class="status-badge">1</span><h2>السياق والعوامل التمكينية</h2><p>دعم القيادة والكفاءات البشرية والبنية التقنية وجاهزية البيانات، إضافة إلى حجم المنشأة وعمرها وقطاعها وعدد المنصات. تفسر الظروف ولا تدخل في درجة MCM.</p></article><article class="card span-4"><span class="status-badge">2</span><h2>MCM · القدرة المؤسسية</h2><p>سبعة أبعاد تُطبّع بنودها إلى 0–100 ثم تجمع بأوزان إصدار الأداة.</p></article><article class="card span-4"><span class="status-badge">3</span><h2>SMCE · النتيجة الاتصالية</h2><p>خمسة أبعاد تُحتسب بصورة مستقلة لاختبار الأثر الإيجابي المقترح للنضج على الكفاءة.</p></article><article class="card span-6"><h2>أبعاد MCM</h2><div class="pill-list">${mcm.map(item => `<span>${e(item)}</span>`).join('')}</div></article><article class="card span-6"><h2>أبعاد SMCE</h2><div class="pill-list">${smce.map(item => `<span>${e(item)}</span>`).join('')}</div></article><article class="card span-12"><h2>المراحل الخمس</h2><div class="maturity-stages compact">${['عشوائي','ناشئ','متكامل','استباقي ومتكيف','مؤسسي وذكي'].map((label,index)=>`<div><b>${index+1}</b><span>${e(label)}</span></div>`).join('')}</div></article><article class="card span-12"><h2>عقد علمي واضح</h2><ul><li>الإجابة المفقودة لا تتحول إلى صفر.</li><li>الاحتساب والتصنيف والتشخيص تجري على الخادم.</li><li>كل نتيجة ترتبط بإصدار أداة وإصدار احتساب.</li><li>العلاقة MCM ← SMCE مقترحة وليست ادعاءً سببيًا مثبتًا.</li><li>المستويات والحدود الحالية مؤقتة وموسومة Provisional حتى التحقق الكمي.</li></ul></article></div></div>`;
 }

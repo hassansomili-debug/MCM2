@@ -343,7 +343,7 @@ def score_payload(db, assessment_id: int) -> dict:
             narrative = "قدرات النضج أعلى من الكفاءة المرصودة؛ الأولوية لترجمة القدرات المؤسسية إلى أداء اتصالي يومي."
         else:
             alignment_code = "EFFICIENCY_AHEAD_OF_MATURITY"
-            narrative = "الكفاءة المرصودة أعلى من مستوى المأسسة؛ الأولوية لتثبيت الممارسات وتقليل اعتمادها على الأفراد."
+            narrative = "الكفاءة المرصودة أعلى من مستوى الاستدامة؛ الأولوية لتثبيت الممارسات وتقليل اعتمادها على الأفراد."
         relationship = {
             "model": "MCM_TO_SMCE_PROPOSED_POSITIVE_EFFECT",
             "status": "PROVISIONAL_ASSOCIATION_NOT_CAUSAL",
