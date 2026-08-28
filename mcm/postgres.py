@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator, Mapping
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
 IDENTITY_TABLES = {
@@ -171,6 +171,26 @@ def schema_table_names(schema: str) -> list[str]:
     )
 
 
+# Supabase hands out pooler URLs carrying a vendor marker (`?supa=base-pooler.x`)
+# that libpq rejects outright with `invalid URI query parameter: "supa"`. A URL
+# copied verbatim from the provider console is a correct credential, so drop the
+# vendor parameters instead of failing the connection.
+VENDOR_QUERY_PARAMS = frozenset({"supa"})
+
+
+def normalize_database_url(database_url: str) -> str:
+    """Remove provider-specific query parameters libpq refuses to parse."""
+    parts = urlsplit(database_url)
+    if not parts.query:
+        return database_url
+    kept = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if key.lower() not in VENDOR_QUERY_PARAMS
+    ]
+    return urlunsplit(parts._replace(query=urlencode(kept)))
+
+
 def connection_security_options(database_url: str) -> dict[str, str]:
     """Require encrypted PostgreSQL transport and preserve stricter URL modes."""
     query = {
@@ -250,6 +270,7 @@ def connect_postgres(database_url: str, *, application_name: str = "mcm-platform
             "PostgreSQL storage requires the psycopg[binary] dependency."
         ) from exc
 
+    database_url = normalize_database_url(database_url)
     connection = psycopg.connect(
         database_url,
         connect_timeout=10,

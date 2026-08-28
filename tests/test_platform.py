@@ -18,7 +18,12 @@ from http.server import ThreadingHTTPServer
 from mcm import config
 from mcm.api import API
 from mcm.database import POSTGRES_SCHEMA, POSTGRES_TABLES, _migrate_legacy, init_db
-from mcm.postgres import HybridRow, connection_security_options, postgres_sql
+from mcm.postgres import (
+    HybridRow,
+    connection_security_options,
+    normalize_database_url,
+    postgres_sql,
+)
 from mcm.scoring import _normalize
 
 
@@ -345,6 +350,22 @@ class PostgresAdapterTests(unittest.TestCase):
         self.assertEqual({}, connection_security_options("postgresql://db.example/app?sslmode=verify-full"))
         with self.assertRaises(ValueError):
             connection_security_options("postgresql://db.example/app?sslmode=disable")
+
+    def test_supabase_vendor_query_parameter_is_stripped(self):
+        # Supabase hands out pooler URLs ending in ?supa=base-pooler.x, which
+        # libpq refuses with `invalid URI query parameter: "supa"`.
+        base = "postgresql://user:pass@db.pooler.supabase.com:6543/postgres"
+        self.assertEqual(base, normalize_database_url(f"{base}?supa=base-pooler.x"))
+        self.assertEqual(
+            f"{base}?sslmode=require",
+            normalize_database_url(f"{base}?sslmode=require&supa=base-pooler.x"),
+        )
+        self.assertEqual(base, normalize_database_url(base))
+        # A stripped vendor marker must not weaken the transport requirement.
+        self.assertEqual(
+            {"sslmode": "require"},
+            connection_security_options(normalize_database_url(f"{base}?supa=base-pooler.x")),
+        )
 
     def test_postgres_schema_matches_sqlite_surface(self):
         self.assertEqual(44, len(POSTGRES_TABLES))
