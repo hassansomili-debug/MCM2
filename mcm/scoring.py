@@ -313,7 +313,7 @@ def score_payload(db, assessment_id: int) -> dict:
            FROM dimension_scores ds
            LEFT JOIN assessments a ON a.id=ds.assessment_id
            LEFT JOIN dimensions d ON d.version_id=a.version_id AND d.code=ds.dimension_code
-           WHERE ds.assessment_id=? GROUP BY ds.dimension_code ORDER BY ds.construct,ds.dimension_code""",
+           WHERE ds.assessment_id=? ORDER BY ds.construct,ds.dimension_code""",
         (assessment_id,),
     ).fetchall()
     totals = {row["construct"]: row for row in db.execute(

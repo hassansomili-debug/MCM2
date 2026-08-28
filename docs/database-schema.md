@@ -1,6 +1,6 @@
 # Database schema
 
-`mcm/database.py` owns the executable SQLite schema, additive migration for the earlier prototype, seed data and indexes. `PRAGMA foreign_keys=ON`, WAL and a busy timeout are enabled on every connection.
+`mcm/database.py` owns the executable schema, additive SQLite migration, scientific seed and indexes. SQLite enables foreign keys, WAL and a busy timeout locally. Supabase uses `mcm/postgres.py`, which converts DB-API placeholders and identity writes, preserves row compatibility, disables prepared statements for Supavisor, and opens one short-lived connection per request/transaction.
 
 ## Identity and tenancy
 
@@ -25,7 +25,7 @@ Roles are `COMPANY_RESPONDENT`, `COMPANY_ADMIN`, `CONSULTANT`, `RESEARCHER`, and
 | `maturity_levels` | Server-side MCM maturity intervals. |
 | `diagnostic_rules`, `recommendations` | Versioned deterministic evidence library. |
 
-The current SQLite implementation stores the stable item and version-specific wording in one `items` row. PostgreSQL target DDL separates them further only when migration work begins; API consumers use immutable version IDs either way.
+SQLite and PostgreSQL preserve the same 44-table application surface. The Supabase SQL snapshot is `supabase/migrations/202608280001_mcm_platform.sql`; it retains epoch timestamps, numeric flags and text JSON so API and export semantics remain identical across backends.
 
 ## Assessment and scoring
 
@@ -64,3 +64,5 @@ The legacy `answers` and `scores` tables remain only for safe migration of the e
 ## Backup
 
 Stop writes or use SQLite online backup before copying the database. Back up the database and deployment configuration together, encrypt at rest, verify restoration regularly, and never commit `mcm.sqlite3` or generated export files.
+
+For Supabase, use scheduled database backups appropriate to the project plan and test a restore into a separate project. Connection URLs and database passwords remain deployment secrets and must never be committed or exposed through `/api/public-config`.

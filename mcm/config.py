@@ -36,6 +36,22 @@ def _load_local_env() -> None:
 _load_local_env()
 
 ENVIRONMENT = os.environ.get("MCM_ENV", "development").strip().lower()
+DATABASE_URL = (
+    os.environ.get("MCM_DATABASE_URL")
+    or os.environ.get("DATABASE_URL")
+    or os.environ.get("POSTGRES_URL")
+    or ""
+).strip()
+DATABASE_MIGRATION_URL = (
+    os.environ.get("MCM_DATABASE_MIGRATION_URL")
+    or os.environ.get("POSTGRES_URL_NON_POOLING")
+    or DATABASE_URL
+).strip()
+if DATABASE_URL and not DATABASE_URL.startswith(("postgresql://", "postgres://")):
+    raise RuntimeError("MCM_DATABASE_URL must be a PostgreSQL connection URL")
+if DATABASE_MIGRATION_URL and not DATABASE_MIGRATION_URL.startswith(("postgresql://", "postgres://")):
+    raise RuntimeError("MCM_DATABASE_MIGRATION_URL must be a PostgreSQL connection URL")
+DB_BACKEND = "postgresql" if DATABASE_URL else "sqlite"
 DB_PATH = Path(
     os.environ.get(
         "MCM_DB_PATH",
@@ -64,17 +80,19 @@ AI_AVAILABLE = AI_PROVIDER == "ollama" or (AI_PROVIDER in {"groq", "gemini"} and
 
 PLATFORM_ADMIN_EMAIL = os.environ.get("MCM_ADMIN_EMAIL", "hmsomili@gmail.com").lower()
 PLATFORM_ADMIN_NAME = os.environ.get("MCM_ADMIN_NAME", "مدير المنصة")
+PLATFORM_ADMIN_PASSWORD_CONFIGURED = bool(os.environ.get("MCM_ADMIN_PASSWORD"))
 PLATFORM_ADMIN_PASSWORD = os.environ.get("MCM_ADMIN_PASSWORD") or secrets.token_urlsafe(32)
 EXPOSE_DEV_RESET_TOKEN = os.environ.get("MCM_EXPOSE_DEV_RESET_TOKEN", "1" if ENVIRONMENT != "production" and not os.environ.get("VERCEL") else "0") == "1"
 BOOTSTRAP_ORG_NAME = os.environ.get("MCM_BOOTSTRAP_ORG_NAME", "إدارة مقياس النضج الاتصالي التسويقي")
-EPHEMERAL_STORAGE = bool(os.environ.get("VERCEL")) and str(DB_PATH).startswith("/tmp/")
-ALLOW_REGISTRATION = os.environ.get("MCM_ALLOW_REGISTRATION", "0" if EPHEMERAL_STORAGE else "1") == "1"
+EPHEMERAL_STORAGE = not DATABASE_URL and bool(os.environ.get("VERCEL")) and str(DB_PATH).startswith("/tmp/")
+STORAGE_MODE = "supabase-postgresql" if DATABASE_URL else ("ephemeral-demo" if EPHEMERAL_STORAGE else "sqlite-local")
+ALLOW_REGISTRATION = os.environ.get("MCM_ALLOW_REGISTRATION", "0") == "1"
 
 if ENVIRONMENT == "production":
     if len(PLATFORM_ADMIN_PASSWORD) < 10:
         raise RuntimeError("MCM_ADMIN_PASSWORD must be a private secret of at least 10 characters in production")
-    if str(DB_PATH).startswith("/tmp/"):
-        raise RuntimeError("MCM_DB_PATH must point to persistent storage in production")
+    if not DATABASE_URL and str(DB_PATH).startswith("/tmp/"):
+        raise RuntimeError("MCM_DATABASE_URL must point to durable PostgreSQL storage in production")
     if EXPOSE_DEV_RESET_TOKEN:
         raise RuntimeError("MCM_EXPOSE_DEV_RESET_TOKEN must be disabled in production")
 

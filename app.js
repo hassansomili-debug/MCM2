@@ -185,16 +185,76 @@ async function router() {
 }
 
 function publicNav() {
-  return `<nav class="public-nav" aria-label="التنقل الرئيسي"><a class="public-brand" href="#landing"><span>ن</span><b>مقياس النضج الاتصالي التسويقي</b></a><div><a href="#landing">الرئيسية</a><a href="#participant">لدي دعوة</a><a class="secondary-button" href="#login">تسجيل الدخول</a><a class="primary-button" href="#participant-start">ابدأ المقياس</a></div></nav>`;
+  return `<nav class="public-nav" aria-label="التنقل الرئيسي"><a class="public-brand" href="#landing"><span>ن</span><b>مقياس النضج الاتصالي التسويقي</b></a><div><a href="#landing">الرئيسية</a><button class="landing-nav-link" data-action="scroll-maturity" type="button">مراحل النضج</button><a href="#participant">لدي دعوة</a><a class="secondary-button" href="#login">تسجيل الدخول</a><a class="primary-button" href="#participant-start">ابدأ المقياس</a></div></nav>`;
+}
+
+function scrollElementIntoView(element, block = 'start') {
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  element?.scrollIntoView({behavior: reducedMotion ? 'auto' : 'smooth', block});
 }
 
 function renderLanding() {
-  state.publicPage = true; applyShell();
   const storageNotice = state.publicConfig.storage === 'ephemeral-demo' ? `<div class="landing-alert"><strong>نسخة عرض مؤقتة</strong><span>${e(state.publicConfig.notice || 'قد تُعاد تهيئة البيانات؛ لا تدخل بيانات حساسة.')}</span></div>` : '';
   const mcmDimensions = ['الحوكمة والتوجيه','ذكاء أصحاب المصلحة','نزاهة المعلومات','تنسيق رحلة العميل','مواءمة الوعد والتجربة','الأدلة والتعلّم','المأسسة والتوسع'];
   const smceDimensions = ['الاستجابة والحل','المعنى والتفاعل','كفاءة الفعل','انخفاض الاحتكاك','كفاءة الموارد والأهداف'];
-  const stages = [['١','تفاعلي'],['٢','مستجيب'],['٣','مُدار ومتكامل'],['٤','استباقي ومتكيّف'],['٥','مؤسسي وذكي']];
-  appView.innerHTML = `<div class="landing-page">${publicNav()}${storageNotice}<main><section class="landing-hero"><div class="hero-copy"><div class="eyebrow">للمنشآت الصغيرة والمتوسطة في السعودية</div><h1>حوّل الاتصال التسويقي من نشاط متفرق إلى <i>قدرة مؤسسية تصنع الأثر.</i></h1><p>شخّص نضج منظومتك الاتصالية، واكتشف مدى ترجمة هذا النضج إلى كفاءة في التواصل الاجتماعي، ثم احصل على تصنيف واضح وخارطة تطوير عملية.</p><div class="hero-actions"><a class="primary-button large" href="#participant-start">ابدأ المقياس مباشرة</a><button class="secondary-button large" data-action="scroll-model" type="button">استكشف النموذج</button></div><div class="hero-proof"><span><b>٧</b> أبعاد للنضج</span><span><b>٥</b> أبعاد للكفاءة</span><span><b>٥</b> مراحل تطور</span></div></div><div class="hero-model" aria-label="ملخص النموذج المفاهيمي"><div class="model-column enablers"><small>السياق والممكنات</small><b>قيادة · كفاءات · تقنية · بيانات</b></div><span class="model-arrow">←</span><div class="model-column mcm"><small>قدرة مؤسسية</small><b>MCM</b><strong>النضج الاتصالي التسويقي</strong></div><span class="model-arrow teal">←</span><div class="model-column smce"><small>نتيجة اتصالية</small><b>SMCE</b><strong>كفاءة التواصل الاجتماعي</strong></div><p>أثر إيجابي مقترح · نموذج بحثي أولي</p></div></section><section class="landing-section value-section"><div class="section-intro"><span>قراءة أعمق من مؤشرات التفاعل</span><h2>ماذا سيكشف المقياس لمنشأتك؟</h2></div><div class="value-grid"><article><b>01</b><h3>أين تقف الآن؟</h3><p>تصنيف منشأتك ضمن خمس مراحل نضج متدرجة بلغة إدارية واضحة.</p></article><article><b>02</b><h3>ما الذي يعطّل الكفاءة؟</h3><p>فهم الفجوة بين قدرات المؤسسة وبين سرعة وجودة وكلفة الاتصال عبر المنصات.</p></article><article><b>03</b><h3>ما الخطوة التالية؟</h3><p>أولويات مرتبة وخارطة عمل مرحلية مبنية على أضعف أبعاد القدرة.</p></article></div></section><section class="landing-section model-section" id="methodology-public"><div class="section-intro"><span>النموذج التشخيصي</span><h2>النضج قدرة أعلى رتبة، والكفاءة نتيجة لاحقة مقترحة</h2><p>تُحفظ خصائص المنشأة والممكنات كسياق تفسيري منفصل، ولا تُخلط بدرجة النضج الأساسية.</p></div><div class="construct-grid"><article class="construct-card navy"><header><span>MCM</span><h3>النضج الاتصالي التسويقي</h3></header><ol>${mcmDimensions.map((item,index)=>`<li><i>${index+1}</i>${e(item)}</li>`).join('')}</ol></article><div class="effect-card"><b>أثر إيجابي<br>مقترح</b><span>←</span><small>يُختبر كميًا ولا يُعرض كعلاقة سببية مثبتة</small></div><article class="construct-card teal"><header><span>SMCE</span><h3>الكفاءة الاتصالية</h3></header><ol>${smceDimensions.map((item,index)=>`<li><i>${index+1}</i>${e(item)}</li>`).join('')}</ol></article></div></section><section class="landing-section stages-section"><div class="section-intro"><span>مسار التطور</span><h2>خمس مراحل تصف موقع المنشأة واتجاه انتقالها</h2></div><div class="maturity-stages">${stages.map(([n,label])=>`<div><b>${n}</b><span>${e(label)}</span></div>`).join('')}</div></section><section class="landing-section report-preview"><div><span>نتيجة قابلة للاستخدام</span><h2>تقرير تنفيذي برسوم واضحة، وليس مجرد درجة.</h2><p>يقارن بين MCM وSMCE، يعرض الأبعاد الاثني عشر، يحدد المرحلة الحالية، ويرتب أولويات التطوير. وتتوفر للمدير ملفات Excel وSPSS مع قاموس متغيرات وترميزات جاهزة للتحليل.</p><a class="primary-button large" href="#participant-start">ابدأ تشخيص منشأتك</a></div><div class="preview-card"><header><span>نتيجة افتراضية للتوضيح</span><b>مُدار ومتكامل</b></header><div class="preview-score"><strong>64</strong><small>/100</small></div><div class="preview-bars">${[82,71,64,58,46].map((score,index)=>`<div><span>البعد ${index+1}</span><i><b style="--score:${score}%"></b></i><em>${score}</em></div>`).join('')}</div></div></section><section class="landing-cta"><span>البدء لا يحتاج حسابًا</span><h2>أدخل معلومات منشأتك وابدأ الإجابة مباشرة.</h2><p>تعرض العبارات خيارات لفظية حسب نوعها: مدى انطباق الممارسة أو موقع النتيجة مقارنة بالمنافسين، مع «لا ينطبق» و«لا أعرف» عند الحاجة.</p><a class="primary-button light large" href="#participant-start">ابدأ المقياس الآن</a></section></main><footer class="public-footer"><b>مقياس النضج الاتصالي التسويقي</b><span>نموذج بحثي تشخيصي أولي للمنشآت الصغيرة والمتوسطة · 2026</span><a href="#login">تسجيل الدخول</a></footer></div>`;
+  const stages = [
+    {number:'١',label:'عشوائي',copy:'ممارسات متفرقة وردود فعل تعتمد على الاجتهاد الفردي.'},
+    {number:'٢',label:'ناشئ',copy:'أدوار وخطوات أولية بدأت تتشكل مع تفاوت في التطبيق.'},
+    {number:'٣',label:'متكامل',copy:'عمليات موحّدة وبيانات مترابطة عبر الفرق والقنوات.'},
+    {number:'٤',label:'استباقي ومتكيف',copy:'قرارات مبكرة وتحسين مستمر يستجيب للمتغيرات.'},
+    {number:'٥',label:'مؤسسي وذكي',copy:'قدرة راسخة تقودها البيانات والتعلّم على مستوى المنشأة.'},
+  ];
+  const maturityCards = stages.map(stage => `<li><span>المرحلة ${stage.number}</span><h3>${e(stage.label)}</h3><p>${e(stage.copy)}</p></li>`).join('');
+  appView.innerHTML = `<div class="landing-page">${publicNav()}${storageNotice}<main>
+    <section class="landing-hero">
+      <div class="hero-copy">
+        <div class="eyebrow">مقياس تشخيصي للمنشآت الصغيرة والمتوسطة في السعودية</div>
+        <h1>اعرف أين تقف منشأتك، وحوّل الاتصال إلى <i>قدرة مؤسسية تصنع الأثر.</i></h1>
+        <p>شخّص نضج الاتصال التسويقي، واكتشف مدى تحوّله إلى كفاءة في التواصل الاجتماعي، ثم انتقل من النتيجة إلى أولويات وخارطة تحسين قابلة للتنفيذ.</p>
+        <div class="hero-actions"><a class="primary-button large" href="#participant-start">ابدأ المقياس مباشرة</a><button class="secondary-button large" data-action="scroll-maturity" type="button">تعرّف على المراحل</button></div>
+        <div class="hero-proof"><span><b>٦٧</b> عبارة علمية</span><span><b>٢٠</b> بُعدًا وسياقًا</span><span><b>٥</b> مراحل نضج</span></div>
+      </div>
+      <div class="hero-model" role="group" aria-label="ملخص النموذج المفاهيمي">
+        <div class="model-column enablers"><small>السياق والممكنات</small><b>قيادة · كفاءات · تقنية · بيانات</b></div>
+        <span class="model-arrow" aria-hidden="true">←</span>
+        <div class="model-column mcm"><small>قدرة مؤسسية</small><b>MCM</b><strong>النضج الاتصالي التسويقي</strong></div>
+        <span class="model-arrow teal" aria-hidden="true">←</span>
+        <div class="model-column smce"><small>نتيجة اتصالية</small><b>SMCE</b><strong>كفاءة التواصل الاجتماعي</strong></div>
+        <p>أثر إيجابي مقترح · نموذج بحثي أولي</p>
+      </div>
+    </section>
+    <section class="landing-confidence" aria-label="مزايا المقياس">
+      <article><b>دخول مباشر</b><span>يبدأ المشارك دون إنشاء حساب.</span></article>
+      <article><b>نتيجة تنفيذية</b><span>تصنيف ورسوم وأولويات وخطة 30/90/180.</span></article>
+      <article><b>بيانات بحثية</b><span>Excel وSPSS بترميزات جاهزة للتحليل.</span></article>
+      <article><b>فصل علمي</b><span>النضج والكفاءة والممكنات تُقرأ بصورة مستقلة.</span></article>
+    </section>
+    <section class="landing-section value-section">
+      <div class="section-intro"><span>أبعد من مؤشرات التفاعل</span><h2>ماذا سيكشف المقياس لمنشأتك؟</h2><p>قراءة إدارية تساعدك على تحديد موضع القدرة الاتصالية، وفهم الفجوات، وترتيب الاستثمار التالي.</p></div>
+      <div class="value-grid">
+        <article><b>01</b><h3>أين تقف الآن؟</h3><p>تصنيف المنشأة ضمن خمس مراحل واضحة، من العمل العشوائي إلى القدرة المؤسسية الذكية.</p></article>
+        <article><b>02</b><h3>ما الذي يعطّل الكفاءة؟</h3><p>فهم الفجوة بين قدرات المؤسسة وبين سرعة وجودة وكلفة الاتصال عبر المنصات.</p></article>
+        <article><b>03</b><h3>ما الخطوة التالية؟</h3><p>أولويات مرتبة وخارطة عمل مرحلية مرتبطة بالمسؤول والمؤشر والأفق الزمني.</p></article>
+      </div>
+    </section>
+    <section class="landing-section model-section" id="methodology-public">
+      <div class="section-intro"><span>النموذج التشخيصي</span><h2>النضج قدرة مؤسسية، والكفاءة نتيجة اتصالية مقترحة</h2><p>تُحفظ خصائص المنشأة والممكنات كسياق تفسيري منفصل، ولا تُخلط بدرجة النضج الأساسية.</p></div>
+      <div class="construct-grid">
+        <article class="construct-card navy"><header><span>MCM</span><h3>النضج الاتصالي التسويقي</h3></header><ol>${mcmDimensions.map((item,index)=>`<li><i>${index+1}</i>${e(item)}</li>`).join('')}</ol></article>
+        <div class="effect-card"><b>أثر إيجابي<br>مقترح</b><span aria-hidden="true">←</span><small>يُختبر كميًا ولا يُعرض كعلاقة سببية مثبتة</small></div>
+        <article class="construct-card teal"><header><span>SMCE</span><h3>الكفاءة الاتصالية</h3></header><ol>${smceDimensions.map((item,index)=>`<li><i>${index+1}</i>${e(item)}</li>`).join('')}</ol></article>
+      </div>
+    </section>
+    <section class="landing-section stages-section" id="maturity-public">
+      <div class="section-intro"><span>مسار التطور</span><h2>خمس مراحل تصف موقع المنشأة واتجاه انتقالها</h2><p>لا تقيس المراحل حجم النشاط أو الإنفاق؛ بل مدى رسوخ الحوكمة والتكامل والتعلّم والقدرة على التكيّف.</p></div>
+      <ol class="landing-maturity" aria-label="مراحل النضج الخمس">${maturityCards}</ol>
+    </section>
+    <section class="landing-section report-preview">
+      <div><span>نتيجة قابلة للاستخدام</span><h2>داشبورد تنفيذي، وليس مجرد درجة.</h2><p>يقارن بين MCM وSMCE، يعرض الأبعاد والممكنات والنتائج، يحدد المرحلة الحالية، ثم يرتب فرص التطوير. وتتوفر للمدير ملفات Excel وSPSS مع قاموس متغيرات وترميزات جاهزة.</p><a class="primary-button large" href="#participant-start">ابدأ تشخيص منشأتك</a></div>
+      <div class="preview-card"><header><span>نتيجة افتراضية للتوضيح</span><b>متكامل</b></header><div class="preview-score"><strong>64</strong><small>/100</small></div><div class="preview-bars">${[82,71,64,58,46].map((score,index)=>`<div><span>البعد ${index+1}</span><i><b style="--score:${score}%"></b></i><em>${score}</em></div>`).join('')}</div><footer><span>الأولوية التالية</span><b>تعزيز التعلّم والتكيّف</b></footer></div>
+    </section>
+    <section class="landing-cta"><span>البدء لا يحتاج حسابًا</span><h2>أدخل معلومات منشأتك وابدأ الإجابة مباشرة.</h2><p>خيارات لفظية واضحة بمقياس ليكرت، مع «لا ينطبق» و«لا أعرف» عند الحاجة.</p><a class="primary-button light large" href="#participant-start">ابدأ المقياس الآن</a></section>
+  </main><footer class="public-footer"><b>مقياس النضج الاتصالي التسويقي</b><span>نموذج بحثي تشخيصي أولي للمنشآت الصغيرة والمتوسطة · 2026</span><a href="#login">تسجيل الدخول</a></footer></div>`;
 }
 
 function renderParticipantStart() {
@@ -546,7 +606,7 @@ async function renderSettings() {
 function renderMethodology() {
   const mcm = ['MCM01 الحوكمة والتوجيه الاستراتيجي','MCM02 ذكاء أصحاب المصلحة والسياق','MCM03 حوكمة المعلومات والنزاهة','MCM04 التنسيق التنظيمي ورحلة العميل','MCM05 مواءمة الوعد والتجربة','MCM06 الأدلة والتعلم التكيفي','MCM07 المأسسة وقابلية التوسع'];
   const smce = ['SMCE01 كفاءة الاستجابة والحل','SMCE02 جودة المعنى والتفاعل','SMCE03 كفاءة الانتقال إلى الفعل','SMCE04 انخفاض الاحتكاك الاتصالي','SMCE05 كفاءة الموارد وتحقيق الأهداف'];
-  appView.innerHTML = `<div class="page">${pageHeading('المعرفة · المنهجية','كيف يعمل مقياس النضج الاتصالي التسويقي','فصل واضح بين السياق، القدرة المؤسسية، والكفاءة الاتصالية الناتجة.')}${researchNotice()}<div class="card-grid"><article class="card span-4"><span class="status-badge">1</span><h2>السياق والعوامل التمكينية</h2><p>دعم القيادة والكفاءات البشرية والبنية التقنية وجاهزية البيانات، إضافة إلى حجم المنشأة وعمرها وقطاعها وعدد المنصات. تفسر الظروف ولا تدخل في درجة MCM.</p></article><article class="card span-4"><span class="status-badge">2</span><h2>MCM · القدرة المؤسسية</h2><p>سبعة أبعاد تُطبّع بنودها إلى 0–100 ثم تجمع بأوزان إصدار الأداة.</p></article><article class="card span-4"><span class="status-badge">3</span><h2>SMCE · النتيجة الاتصالية</h2><p>خمسة أبعاد تُحتسب بصورة مستقلة لاختبار الأثر الإيجابي المقترح للنضج على الكفاءة.</p></article><article class="card span-6"><h2>أبعاد MCM</h2><div class="pill-list">${mcm.map(item => `<span>${e(item)}</span>`).join('')}</div></article><article class="card span-6"><h2>أبعاد SMCE</h2><div class="pill-list">${smce.map(item => `<span>${e(item)}</span>`).join('')}</div></article><article class="card span-12"><h2>المراحل الخمس</h2><div class="maturity-stages compact">${['تفاعلي','مستجيب','مُدار ومتكامل','استباقي ومتكيّف','مؤسسي وذكي'].map((label,index)=>`<div><b>${index+1}</b><span>${e(label)}</span></div>`).join('')}</div></article><article class="card span-12"><h2>عقد علمي واضح</h2><ul><li>الإجابة المفقودة لا تتحول إلى صفر.</li><li>الاحتساب والتصنيف والتشخيص تجري على الخادم.</li><li>كل نتيجة ترتبط بإصدار أداة وإصدار احتساب.</li><li>العلاقة MCM ← SMCE مقترحة وليست ادعاءً سببيًا مثبتًا.</li><li>المستويات والحدود الحالية مؤقتة وموسومة Provisional حتى التحقق الكمي.</li></ul></article></div></div>`;
+  appView.innerHTML = `<div class="page">${pageHeading('المعرفة · المنهجية','كيف يعمل مقياس النضج الاتصالي التسويقي','فصل واضح بين السياق، القدرة المؤسسية، والكفاءة الاتصالية الناتجة.')}${researchNotice()}<div class="card-grid"><article class="card span-4"><span class="status-badge">1</span><h2>السياق والعوامل التمكينية</h2><p>دعم القيادة والكفاءات البشرية والبنية التقنية وجاهزية البيانات، إضافة إلى حجم المنشأة وعمرها وقطاعها وعدد المنصات. تفسر الظروف ولا تدخل في درجة MCM.</p></article><article class="card span-4"><span class="status-badge">2</span><h2>MCM · القدرة المؤسسية</h2><p>سبعة أبعاد تُطبّع بنودها إلى 0–100 ثم تجمع بأوزان إصدار الأداة.</p></article><article class="card span-4"><span class="status-badge">3</span><h2>SMCE · النتيجة الاتصالية</h2><p>خمسة أبعاد تُحتسب بصورة مستقلة لاختبار الأثر الإيجابي المقترح للنضج على الكفاءة.</p></article><article class="card span-6"><h2>أبعاد MCM</h2><div class="pill-list">${mcm.map(item => `<span>${e(item)}</span>`).join('')}</div></article><article class="card span-6"><h2>أبعاد SMCE</h2><div class="pill-list">${smce.map(item => `<span>${e(item)}</span>`).join('')}</div></article><article class="card span-12"><h2>المراحل الخمس</h2><div class="maturity-stages compact">${['عشوائي','ناشئ','متكامل','استباقي ومتكيف','مؤسسي وذكي'].map((label,index)=>`<div><b>${index+1}</b><span>${e(label)}</span></div>`).join('')}</div></article><article class="card span-12"><h2>عقد علمي واضح</h2><ul><li>الإجابة المفقودة لا تتحول إلى صفر.</li><li>الاحتساب والتصنيف والتشخيص تجري على الخادم.</li><li>كل نتيجة ترتبط بإصدار أداة وإصدار احتساب.</li><li>العلاقة MCM ← SMCE مقترحة وليست ادعاءً سببيًا مثبتًا.</li><li>المستويات والحدود الحالية مؤقتة وموسومة Provisional حتى التحقق الكمي.</li></ul></article></div></div>`;
 }
 
 async function renderResearch() {
@@ -654,7 +714,7 @@ async function confirmSubmission(id, participant = false) {
   else review = await api(`/api/assessments/${id}/review`);
   if (!review?.complete) {
     showToast(`تبقى ${review.missing_required.length} بندًا مطلوبًا.`,'error');
-    const first = document.querySelector(`[data-question="${review.missing_required[0]?.item_id}"]`); first?.scrollIntoView({behavior:'smooth',block:'center'});
+    const first = document.querySelector(`[data-question="${review.missing_required[0]?.item_id}"]`); scrollElementIntoView(first, 'center');
     return;
   }
   openDialog(`<h2 id="dialog-title">تأكيد إرسال التقييم</h2><p>بعد الإرسال تُقفل الإجابات وتُحسب النتائج على الخادم. لا يمكن التراجع عن هذه الخطوة.</p><div class="button-row"><button class="primary-button" data-action="confirm-submit" data-id="${id}" data-participant="${participant ? '1':'0'}">تأكيد الإرسال</button><button class="secondary-button" data-action="close-dialog">العودة للمراجعة</button></div>`);
@@ -682,7 +742,8 @@ document.addEventListener('click', async event => {
   const action = button.dataset.action;
   try {
     if (action === 'auth-mode') { state.authMode = button.dataset.mode; renderAuth(); }
-    else if (action === 'scroll-model') document.querySelector('#methodology-public')?.scrollIntoView({behavior:'smooth',block:'start'});
+    else if (action === 'scroll-model') scrollElementIntoView(document.querySelector('#methodology-public'));
+    else if (action === 'scroll-maturity') scrollElementIntoView(document.querySelector('#maturity-public'));
     else if (action === 'print-result') window.print();
     else if (action === 'forgot-password') navigate('forgot');
     else if (action === 'close-dialog') closeDialog();

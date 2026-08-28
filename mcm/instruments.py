@@ -31,6 +31,13 @@ SCALE_RESPONSE_TYPES = {
     "RELATIVE_5_COMPETITOR": "LIKERT_RELATIVE",
 }
 NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+CANONICAL_MATURITY_LABELS_AR = (
+    "عشوائي",
+    "ناشئ",
+    "متكامل",
+    "استباقي ومتكيف",
+    "مؤسسي وذكي",
+)
 
 
 class InstrumentImportError(ValueError):
@@ -179,12 +186,14 @@ def _normalize_tables(tables: dict) -> dict:
     for index, row in enumerate(levels):
         source_minimum = _first(row, "min_score", "min")
         source_maximum = _first(row, "max_score", "max")
+        source_label_ar = _first(row, "label_ar", "name_ar")
         threshold_status = str(_first(row, "threshold_status")).strip().upper()
         row.update(
             code=_first(row, "code", "level_code"),
             level_order=_first(row, "level_order", "level_number", "order", default=str(index + 1)),
-            label_ar=_first(row, "label_ar", "name_ar"),
+            label_ar=(CANONICAL_MATURITY_LABELS_AR[index] if len(levels) == 5 else source_label_ar),
             label_en=_first(row, "label_en", "name_en"),
+            source_label_ar=source_label_ar,
             threshold_status=threshold_status,
             source_min_score=source_minimum,
             source_max_score=source_maximum,

@@ -4,6 +4,8 @@ Implemented controls include PBKDF2-SHA256 password hashing (310,000 iterations)
 
 Company administrators cannot grant researcher or super-admin roles. Research access is global only for `RESEARCHER` and `SUPER_ADMIN`. Participant sessions are assessment-scoped, become read-only after submission and cannot be recreated by accepting an already accepted invitation.
 
-Production requirements not supplied by this repository are HTTPS termination, managed/shared rate limiting for multiple instances, SMTP or another reset-delivery provider, centralized logs/alerts, secret rotation, encrypted backups and tested restore, durable PostgreSQL or a single persistent encrypted volume, and periodic access review.
+Production requirements not supplied by this repository are HTTPS termination, managed/shared rate limiting for multiple instances, SMTP or another reset-delivery provider, centralized logs/alerts, secret rotation, encrypted backups and tested restore, a provisioned durable database, and periodic access review.
 
-`MCM_ENV=production` refuses a default/short super-admin secret, an exposed development reset token, or a database path under `/tmp`. Vercel is published only as an explicitly labelled ephemeral demo until a durable external data adapter exists.
+`MCM_ENV=production` refuses a default/short super-admin secret, an exposed development reset token, or a database path under `/tmp`.
+
+The production adapter supports Supabase PostgreSQL with short-lived serverless connections, disabled prepared statements for transaction pooling, and TLS required by default unless the connection URL explicitly selects a stricter mode. Migration version 4 enables row-level security on all 44 application tables and removes table, sequence and future-default access from Supabase `anon` and `authenticated` roles. The backend must connect with a private server-side database role; no database credential is exposed to the browser. Vercel remains labelled `ephemeral-demo` until `MCM_DATABASE_URL` is configured and the migration/seed has been applied.

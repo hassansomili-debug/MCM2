@@ -51,10 +51,10 @@ _SAFETY_NOTICE = (
 )
 
 _MATURITY_LEVELS = {
-    "REACTIVE_AD_HOC": (1, "تفاعلي / عشوائي"),
-    "RESPONSIVE_EMERGING": (2, "مستجيب / ناشئ"),
-    "MANAGED_INTEGRATED": (3, "مدار ومتكامل"),
-    "PROACTIVE_ADAPTIVE": (4, "استباقي ومتكيّف"),
+    "REACTIVE_AD_HOC": (1, "عشوائي"),
+    "RESPONSIVE_EMERGING": (2, "ناشئ"),
+    "MANAGED_INTEGRATED": (3, "متكامل"),
+    "PROACTIVE_ADAPTIVE": (4, "استباقي ومتكيف"),
     "INSTITUTIONALISED_INTELLIGENT": (5, "مؤسسي وذكي"),
 }
 

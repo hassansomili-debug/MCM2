@@ -6,15 +6,35 @@ import secrets
 import sqlite3
 import time
 from contextlib import contextmanager
+from typing import Any
 
 from . import config
+from .postgres import connect_postgres, postgres_schema, schema_table_names
+
+
+try:
+    from psycopg import IntegrityError as PostgresIntegrityError
+except ImportError:  # SQLite-only local development does not need psycopg installed.
+    PostgresIntegrityError = None
+
+
+INTEGRITY_ERRORS = (sqlite3.IntegrityError,) + (
+    (PostgresIntegrityError,) if PostgresIntegrityError is not None else ()
+)
+REQUIRED_SCHEMA_VERSION = 4
 
 
 def now() -> int:
     return int(time.time())
 
 
-def connect() -> sqlite3.Connection:
+def connect(*, migration: bool = False):
+    database_url = config.DATABASE_MIGRATION_URL if migration else config.DATABASE_URL
+    if database_url:
+        return connect_postgres(
+            database_url,
+            application_name="mcm-migration" if migration else "mcm-platform",
+        )
     config.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(config.DB_PATH, timeout=20)
     db.row_factory = sqlite3.Row
@@ -24,11 +44,19 @@ def connect() -> sqlite3.Connection:
     return db
 
 
+def select_for_update(db, sql: str, params=()):
+    """Lock one selected row on PostgreSQL while preserving SQLite parity."""
+    if getattr(db, "backend", "sqlite") == "postgresql":
+        sql = f"{sql.rstrip().rstrip(';')} FOR UPDATE"
+    return db.execute(sql, params).fetchone()
+
+
 @contextmanager
 def transaction():
     db = connect()
     try:
-        db.execute("BEGIN IMMEDIATE")
+        if not config.DATABASE_URL:
+            db.execute("BEGIN IMMEDIATE")
         yield db
         db.commit()
     except Exception:
@@ -136,6 +164,7 @@ CREATE TABLE IF NOT EXISTS consents (
   consent_version TEXT NOT NULL,
   accepted INTEGER NOT NULL,
   accepted_at INTEGER NOT NULL,
+  CHECK ((user_id IS NOT NULL AND participant_id IS NULL) OR (user_id IS NULL AND participant_id IS NOT NULL)),
   UNIQUE(user_id, participant_id, consent_type, consent_version)
 );
 CREATE TABLE IF NOT EXISTS company_profiles (
@@ -597,6 +626,10 @@ CREATE INDEX IF NOT EXISTS idx_memberships_org ON memberships(organization_id, r
 CREATE INDEX IF NOT EXISTS idx_sessions_user_expiry ON sessions(user_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_assessments_org_status ON assessments(organization_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_assessment_context_demographics ON assessment_context(sector, firm_size, region);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_org_user ON participants(organization_id, user_id) WHERE user_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_participants_org_email ON participants(organization_id, lower(email)) WHERE email IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_consents_user_type_version ON consents(user_id, consent_type, consent_version) WHERE user_id IS NOT NULL AND participant_id IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_consents_participant_type_version ON consents(participant_id, consent_type, consent_version) WHERE participant_id IS NOT NULL AND user_id IS NULL;
 CREATE INDEX IF NOT EXISTS idx_responses_assessment ON responses(assessment_id, participant_id);
 CREATE INDEX IF NOT EXISTS idx_dimension_scores_assessment ON dimension_scores(assessment_id, construct);
 CREATE INDEX IF NOT EXISTS idx_score_runs_assessment ON score_runs(assessment_id, is_current, created_at);
@@ -604,6 +637,9 @@ CREATE INDEX IF NOT EXISTS idx_invitations_token_status ON invitations(token, st
 CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity, entity_id, created_at);
 """
+
+POSTGRES_SCHEMA = postgres_schema(SCHEMA)
+POSTGRES_TABLES = tuple(schema_table_names(POSTGRES_SCHEMA))
 
 
 def _migrate_assessment_context(db: sqlite3.Connection) -> None:
@@ -939,7 +975,7 @@ def _seed_version(db: sqlite3.Connection, instrument_id: int, version: str) -> i
     return version_id
 
 
-def _ensure_seed_data(db: sqlite3.Connection) -> None:
+def _ensure_seed_data(db: sqlite3.Connection, *, reset_admin_password: bool = False) -> None:
     timestamp = now()
     organization = db.execute("SELECT id FROM organizations ORDER BY id LIMIT 1").fetchone()
     if not organization:
@@ -965,10 +1001,16 @@ def _ensure_seed_data(db: sqlite3.Connection) -> None:
     row = db.execute("SELECT id,password_hash FROM users WHERE lower(email)=?", (config.PLATFORM_ADMIN_EMAIL,)).fetchone()
     if row:
         user_id = int(row["id"])
-        db.execute(
-            "UPDATE users SET name=?,preferred_language='ar',verified=1,is_active=1 WHERE id=?",
-            (config.PLATFORM_ADMIN_NAME, user_id),
-        )
+        if reset_admin_password:
+            db.execute(
+                "UPDATE users SET name=?,password_hash=?,preferred_language='ar',verified=1,is_active=1 WHERE id=?",
+                (config.PLATFORM_ADMIN_NAME, password_hash(config.PLATFORM_ADMIN_PASSWORD), user_id),
+            )
+        else:
+            db.execute(
+                "UPDATE users SET name=?,preferred_language='ar',verified=1,is_active=1 WHERE id=?",
+                (config.PLATFORM_ADMIN_NAME, user_id),
+            )
     else:
         user_id = db.execute(
             "INSERT INTO users(email,name,password_hash,preferred_language,verified,is_active,created_at) VALUES (?,?,?,?,?,?,?)",
@@ -998,6 +1040,21 @@ def _ensure_seed_data(db: sqlite3.Connection) -> None:
     existing = {row["version"] for row in versions}
     if "0.4.0" not in existing:
         _seed_version(db, instrument_id, "0.4.0")
+    current_version = db.execute(
+        "SELECT id FROM instrument_versions WHERE instrument_id=? AND version='0.4.0' ORDER BY id DESC LIMIT 1",
+        (instrument_id,),
+    ).fetchone()
+    if current_version:
+        for level in config.INSTRUMENT_MATURITY_LEVELS:
+            db.execute(
+                """UPDATE maturity_levels SET label_ar=?,label_en=?,min_score=?,max_score=?,threshold_status=?,source_reference=?,level_order=?
+                   WHERE version_id=? AND code=?""",
+                (
+                    level["label_ar"], level["label_en"], level["min_score"], level["max_score"],
+                    level["threshold_status"], level["source_reference"], level["level_order"],
+                    current_version["id"], level["code"],
+                ),
+            )
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('MIN_BENCHMARK_SAMPLE','10',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('GAP_THRESHOLD','15',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('PRIORITY_WEIGHTS',?,?)", (json.dumps({"gap": 0.45, "impact": 0.25, "dependency": 0.15, "effort": 0.10, "confidence": 0.05}), timestamp))
@@ -1008,17 +1065,175 @@ def _ensure_seed_data(db: sqlite3.Connection) -> None:
         )
 
 
+def _sqlite_table_exists(db: sqlite3.Connection, table: str) -> bool:
+    return bool(
+        db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            (table,),
+        ).fetchone()
+    )
+
+
+def _deduplicate_legacy_consents(db: sqlite3.Connection) -> None:
+    if not _sqlite_table_exists(db, "consents"):
+        return
+    db.execute(
+        """DELETE FROM consents
+           WHERE user_id IS NOT NULL AND participant_id IS NULL
+             AND id NOT IN (
+               SELECT MAX(id) FROM consents
+               WHERE user_id IS NOT NULL AND participant_id IS NULL
+               GROUP BY user_id,consent_type,consent_version
+             )"""
+    )
+    db.execute(
+        """DELETE FROM consents
+           WHERE participant_id IS NOT NULL AND user_id IS NULL
+             AND id NOT IN (
+               SELECT MAX(id) FROM consents
+               WHERE participant_id IS NOT NULL AND user_id IS NULL
+               GROUP BY participant_id,consent_type,consent_version
+             )"""
+    )
+
+
 def init_db() -> None:
+    if config.DATABASE_URL:
+        verify_postgres()
+        return
     db = connect()
     try:
+        previous_version = 0
+        if _sqlite_table_exists(db, "schema_migrations"):
+            previous_version = int(
+                db.execute("SELECT COALESCE(MAX(version),0) FROM schema_migrations").fetchone()[0]
+            )
+        _deduplicate_legacy_consents(db)
         db.executescript(SCHEMA)
         _migrate_legacy(db)
-        _ensure_seed_data(db)
+        _ensure_seed_data(
+            db,
+            reset_admin_password=(
+                previous_version < REQUIRED_SCHEMA_VERSION
+                and config.PLATFORM_ADMIN_PASSWORD_CONFIGURED
+            ),
+        )
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (1,'full_platform_baseline',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (2,'direct_participant_context_and_revised_model',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (3,'scientific_instrument_v02_platform_v040',?)", (now(),))
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (4,'supabase_postgresql_adapter_and_data_integrity',?)", (now(),))
         db.execute("PRAGMA optimize")
         db.commit()
+    finally:
+        db.close()
+
+
+def migrate_postgres() -> dict[str, int]:
+    """Apply the durable schema once, seed it, and deny Supabase Data API roles."""
+    if not config.DATABASE_MIGRATION_URL:
+        raise RuntimeError("MCM_DATABASE_MIGRATION_URL or MCM_DATABASE_URL is required")
+    db = connect(migration=True)
+    try:
+        db.execute("SELECT pg_advisory_xact_lock(?)", (742_026_082_804,))
+        migration_table = db.execute("SELECT to_regclass('public.schema_migrations')").fetchone()[0]
+        previous_version = 0
+        if migration_table:
+            previous_version = int(
+                db.execute("SELECT COALESCE(MAX(version),0) FROM schema_migrations").fetchone()[0]
+            )
+        if previous_version > REQUIRED_SCHEMA_VERSION:
+            raise RuntimeError(
+                "The PostgreSQL schema is newer than this application release."
+            )
+        existing_tables = {
+            row[0]
+            for row in db.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname='public'"
+            )
+        }
+        existing_application_tables = existing_tables.intersection(POSTGRES_TABLES)
+        if (
+            existing_application_tables
+            and previous_version < REQUIRED_SCHEMA_VERSION
+        ):
+            raise RuntimeError(
+                "A pre-v4 PostgreSQL application schema was detected; an explicit "
+                "upgrade migration is required before this release can be applied."
+            )
+        db.executescript(POSTGRES_SCHEMA)
+        created_tables = {
+            row[0]
+            for row in db.execute(
+                "SELECT tablename FROM pg_tables WHERE schemaname='public'"
+            )
+        }
+        missing_tables = sorted(set(POSTGRES_TABLES).difference(created_tables))
+        if missing_tables:
+            raise RuntimeError(
+                "PostgreSQL schema creation is incomplete: " + ",".join(missing_tables)
+            )
+        _ensure_seed_data(
+            db,
+            reset_admin_password=(
+                previous_version < REQUIRED_SCHEMA_VERSION
+                and config.PLATFORM_ADMIN_PASSWORD_CONFIGURED
+            ),
+        )
+        seeded_items = db.execute(
+            """SELECT COUNT(i.id)
+               FROM instrument_versions v JOIN items i ON i.version_id=v.id
+               WHERE v.version='0.4.0' AND v.status='PILOT'"""
+        ).fetchone()[0]
+        if int(seeded_items or 0) != 67:
+            raise RuntimeError("PostgreSQL scientific instrument seed is incomplete")
+        migration_rows = (
+            (1, "full_platform_baseline"),
+            (2, "direct_participant_context_and_revised_model"),
+            (3, "scientific_instrument_v02_platform_v040"),
+            (4, "supabase_postgresql_adapter_and_data_integrity"),
+        )
+        for version, name in migration_rows:
+            db.execute(
+                "INSERT INTO schema_migrations(version,name,applied_at) VALUES (?,?,?) ON CONFLICT(version) DO UPDATE SET name=excluded.name,applied_at=excluded.applied_at",
+                (version, name, now()),
+            )
+        for table in POSTGRES_TABLES:
+            db.execute(f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY")
+        exposed_roles = {
+            row[0]
+            for row in db.execute(
+                "SELECT rolname FROM pg_roles WHERE rolname IN ('anon','authenticated')"
+            )
+        }
+        if exposed_roles:
+            roles = ",".join(sorted(exposed_roles))
+            db.execute(f"REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM {roles}")
+            db.execute(f"REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM {roles}")
+            db.execute(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM {roles}")
+            db.execute(f"ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM {roles}")
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+    return {"schema_version": REQUIRED_SCHEMA_VERSION, "table_count": len(POSTGRES_TABLES)}
+
+
+def verify_postgres() -> None:
+    """Fast startup check; DDL is deliberately not run in Vercel cold starts."""
+    db = connect()
+    try:
+        version = db.execute("SELECT MAX(version) FROM schema_migrations").fetchone()
+        if not version or int(version[0] or 0) < REQUIRED_SCHEMA_VERSION:
+            raise RuntimeError("PostgreSQL schema migration 4 has not been applied")
+        instrument = db.execute(
+            """SELECT COUNT(i.id) AS item_count
+               FROM instrument_versions v JOIN items i ON i.version_id=v.id
+               WHERE v.version='0.4.0' AND v.status='PILOT'"""
+        ).fetchone()
+        if not instrument or int(instrument[0] or 0) != 67:
+            raise RuntimeError("PostgreSQL scientific instrument seed is incomplete")
     finally:
         db.close()
 

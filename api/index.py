@@ -1,7 +1,8 @@
 from server import API, init_db
 
 # Vercel loads BaseHTTPRequestHandler subclasses exported as `handler`.
-# SQLite is suitable for local development only; production must use an external database.
+# SQLite remains available locally. Production verifies the migrated Supabase
+# PostgreSQL schema here without running DDL during every serverless cold start.
 init_db()
 
 

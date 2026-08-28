@@ -5,7 +5,6 @@ import math
 import os
 import re
 import secrets
-import sqlite3
 import statistics
 import time
 from collections import defaultdict, deque
@@ -15,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import config
 from .ai_plans import generate_improvement_plan
-from .database import assessment_research_eligible, audit, connect, get_config, init_db, now, password_hash, token_hash, verify_password
+from .database import INTEGRITY_ERRORS, assessment_research_eligible, audit, connect, get_config, init_db, now, password_hash, select_for_update, token_hash, verify_password
 from .exports import assessment_pdf, build_research_sheets, csv_bytes, fingerprint, research_workbook, spss_package
 from .instruments import InstrumentImportError, parse_docx_base64, validate_tables
 from .scoring import (
@@ -286,7 +285,7 @@ class API(BaseHTTPRequestHandler):
                 "registration_enabled": config.ALLOW_REGISTRATION,
                 "direct_participant_enabled": True,
                 "platform_name": "مقياس النضج الاتصالي التسويقي",
-                "storage": "ephemeral-demo" if config.EPHEMERAL_STORAGE else "persistent-configured",
+                "storage": config.STORAGE_MODE,
                 "notice": "بيئة عرض مؤقتة؛ لا تستخدم بيانات حقيقية." if config.EPHEMERAL_STORAGE else None,
                 "ai_improvement_plans": {
                     "available": config.AI_AVAILABLE,
@@ -443,9 +442,9 @@ class API(BaseHTTPRequestHandler):
                 "assessment_id": assessment_id,
                 "participant_id": participant_id,
                 "instrument_status": version["status"],
-                "storage": "ephemeral-demo" if config.EPHEMERAL_STORAGE else "persistent-configured",
+                "storage": config.STORAGE_MODE,
             }, 201)
-        except sqlite3.IntegrityError as exc:
+        except INTEGRITY_ERRORS as exc:
             db.rollback()
             raise APIError("assessment_creation_failed", 409) from exc
         finally:
@@ -537,11 +536,22 @@ class API(BaseHTTPRequestHandler):
                 if not _password_ok(password):
                     raise APIError("password_policy_failed", 422)
                 digest = token_hash(str(data.get("token") or ""))
-                reset = db.execute("SELECT * FROM password_reset_tokens WHERE token_hash=? AND used_at IS NULL AND expires_at>?", (digest, now())).fetchone()
+                timestamp = now()
+                db.execute("BEGIN IMMEDIATE")
+                reset = select_for_update(
+                    db,
+                    "SELECT * FROM password_reset_tokens WHERE token_hash=? AND used_at IS NULL AND expires_at>?",
+                    (digest, timestamp),
+                )
                 if not reset:
                     raise APIError("reset_token_invalid", 401)
+                claimed = db.execute(
+                    "UPDATE password_reset_tokens SET used_at=? WHERE token_hash=? AND used_at IS NULL AND expires_at>?",
+                    (timestamp, digest, timestamp),
+                )
+                if claimed.rowcount != 1:
+                    raise APIError("reset_token_invalid", 401)
                 db.execute("UPDATE users SET password_hash=? WHERE id=?", (password_hash(password), reset["user_id"]))
-                db.execute("UPDATE password_reset_tokens SET used_at=? WHERE token_hash=?", (now(), digest))
                 db.execute("DELETE FROM sessions WHERE user_id=?", (reset["user_id"],))
                 audit(db, reset["user_id"], "password_reset", "user", reset["user_id"])
                 db.commit()
@@ -644,6 +654,8 @@ class API(BaseHTTPRequestHandler):
                     raise APIError("invalid_consent_type", 422)
                 accepted = int(bool(data.get("accepted")))
                 version = str(data.get("consent_version") or "1.0")
+                db.execute("BEGIN IMMEDIATE")
+                select_for_update(db, "SELECT id FROM users WHERE id=?", (context["id"],))
                 db.execute("DELETE FROM consents WHERE user_id=? AND participant_id IS NULL AND consent_type=? AND consent_version=?", (context["id"], consent_type, version))
                 db.execute("INSERT INTO consents(user_id,consent_type,consent_version,accepted,accepted_at) VALUES (?,?,?,?,?)", (context["id"], consent_type, version, accepted, now()))
                 audit(db, context["id"], "consent_update", "consent", None, {"type": consent_type, "accepted": bool(accepted)})
@@ -684,8 +696,11 @@ class API(BaseHTTPRequestHandler):
         finally:
             db.close()
 
-    def _find_invitation(self, db, raw: str):
-        return db.execute("SELECT * FROM invitations WHERE token IN (?,?) ORDER BY id DESC LIMIT 1", (token_hash(raw), raw)).fetchone()
+    def _find_invitation(self, db, raw: str, *, lock: bool = False):
+        sql = "SELECT * FROM invitations WHERE token IN (?,?) ORDER BY id DESC LIMIT 1"
+        if lock:
+            return select_for_update(db, sql, (token_hash(raw), raw))
+        return db.execute(sql, (token_hash(raw), raw)).fetchone()
 
     def _invitation_details(self, raw: str):
         db = connect()
@@ -702,7 +717,8 @@ class API(BaseHTTPRequestHandler):
         self._rate_limit("invitation_accept", 20, 3600)
         db = connect()
         try:
-            invitation = self._find_invitation(db, raw)
+            db.execute("BEGIN IMMEDIATE")
+            invitation = self._find_invitation(db, raw, lock=True)
             if not invitation or invitation["expires_at"] <= now() or invitation["status"] != "PENDING":
                 raise APIError("invitation_invalid_or_expired", 404)
             assessment = db.execute("SELECT * FROM assessments WHERE id=? AND status IN ('DRAFT','IN_PROGRESS')", (invitation["assessment_id"],)).fetchone()
@@ -711,6 +727,7 @@ class API(BaseHTTPRequestHandler):
             accepted = bool(data.get("service_consent"))
             if not accepted:
                 raise APIError("service_consent_required", 422)
+            select_for_update(db, "SELECT id FROM organizations WHERE id=?", (invitation["organization_id"],))
             participant = db.execute("SELECT * FROM participants WHERE organization_id=? AND lower(email)=? ORDER BY id LIMIT 1", (invitation["organization_id"], invitation["email"].lower())).fetchone()
             if participant:
                 participant_id = participant["id"]
@@ -822,7 +839,7 @@ class API(BaseHTTPRequestHandler):
                               COUNT(DISTINCT a.id) AS assessment_count
                        FROM instrument_versions v JOIN instruments i ON i.id=v.instrument_id
                        LEFT JOIN items it ON it.version_id=v.id LEFT JOIN assessments a ON a.version_id=v.id
-                       GROUP BY v.id ORDER BY v.id DESC"""
+                       GROUP BY v.id,i.id ORDER BY v.id DESC"""
                 ).fetchall()
                 return self.send_json({"versions": [dict(row) for row in rows]})
             if method == "GET" and re.fullmatch(r"/api/instruments/\d+", path):
@@ -830,7 +847,7 @@ class API(BaseHTTPRequestHandler):
                 version = db.execute("SELECT v.*,i.code AS instrument_code,i.name FROM instrument_versions v JOIN instruments i ON i.id=v.instrument_id WHERE v.id=?", (version_id,)).fetchone()
                 if not version:
                     raise APIError("instrument_version_not_found", 404)
-                dimensions = db.execute("SELECT code,construct,name,name_en,weight,sort_order FROM dimensions WHERE version_id=? OR code IN (SELECT dimension_code FROM items WHERE version_id=?) GROUP BY code ORDER BY sort_order,code", (version_id, version_id)).fetchall()
+                dimensions = db.execute("SELECT code,construct,name,name_en,weight,sort_order FROM dimensions WHERE version_id=? ORDER BY sort_order,code", (version_id,)).fetchall()
                 levels = db.execute("SELECT code,label_ar,label_en,min_score,max_score,level_order FROM maturity_levels WHERE version_id=? ORDER BY level_order", (version_id,)).fetchall()
                 return self.send_json({"version": dict(version), "dimensions": [dict(row) for row in dimensions], "maturity_levels": [dict(row) for row in levels]})
             if method == "GET" and (re.fullmatch(r"/api/instruments/\d+/items", path) or path == "/api/research/items"):
@@ -1038,6 +1055,7 @@ class API(BaseHTTPRequestHandler):
         return version_id, version
 
     def _participant_for_user(self, db, context) -> int:
+        select_for_update(db, "SELECT id FROM users WHERE id=?", (context["id"],))
         participant = db.execute("SELECT id FROM participants WHERE organization_id=? AND user_id=? ORDER BY id LIMIT 1", (context["organization_id"], context["id"])).fetchone()
         if participant:
             return int(participant["id"])
@@ -1073,8 +1091,18 @@ class API(BaseHTTPRequestHandler):
         return participant
 
     def _save_answers(self, db, assessment, participant_id: int, answers: list) -> dict:
-        if assessment["status"] not in {"DRAFT", "IN_PROGRESS"}:
+        db.execute("BEGIN IMMEDIATE")
+        locked = select_for_update(db, "SELECT * FROM assessments WHERE id=?", (assessment["id"],))
+        participant = select_for_update(
+            db,
+            "SELECT status FROM assessment_participants WHERE assessment_id=? AND participant_id=?",
+            (assessment["id"], participant_id),
+        )
+        if not locked or locked["status"] not in {"DRAFT", "IN_PROGRESS"}:
             raise APIError("assessment_locked", 409)
+        if not participant or participant["status"] == "COMPLETED":
+            raise APIError("participant_submission_locked", 409)
+        assessment = locked
         if not isinstance(answers, list) or len(answers) > 250:
             raise APIError("answers_array_invalid", 422)
         timestamp = now()
@@ -1124,7 +1152,12 @@ class API(BaseHTTPRequestHandler):
                 (assessment["id"], participant_id, item_id, numeric_value, text_value, missing, timestamp, timestamp),
             )
             saved += 1
-        db.execute("UPDATE assessments SET status='IN_PROGRESS',updated_at=? WHERE id=?", (timestamp, assessment["id"]))
+        updated = db.execute(
+            "UPDATE assessments SET status='IN_PROGRESS',updated_at=? WHERE id=? AND status IN ('DRAFT','IN_PROGRESS')",
+            (timestamp, assessment["id"]),
+        )
+        if updated.rowcount != 1:
+            raise APIError("assessment_locked", 409)
         return {"saved": saved, "saved_at": timestamp, "review": assessment_review(db, assessment["id"], participant_id)}
 
     def _assessment_detail(self, db, assessment, participant_id: int | None = None) -> dict:
@@ -1146,6 +1179,18 @@ class API(BaseHTTPRequestHandler):
         return {"assessment": dict(assessment), "instrument": dict(version), "items": items, "responses": responses, "review": review, "can_respond": participant_id is not None and assessment["status"] in {"DRAFT", "IN_PROGRESS"}}
 
     def _complete_participant(self, db, assessment, participant_id: int, actor_user_id: int | None) -> dict:
+        db.execute("BEGIN IMMEDIATE")
+        locked = select_for_update(db, "SELECT * FROM assessments WHERE id=?", (assessment["id"],))
+        if not locked or locked["status"] not in {"DRAFT", "IN_PROGRESS"}:
+            raise APIError("assessment_locked", 409)
+        participant = select_for_update(
+            db,
+            "SELECT status FROM assessment_participants WHERE assessment_id=? AND participant_id=?",
+            (assessment["id"], participant_id),
+        )
+        if not participant or participant["status"] == "COMPLETED":
+            raise APIError("participant_submission_locked", 409)
+        assessment = locked
         review = assessment_review(db, assessment["id"], participant_id)
         if not review["complete"]:
             raise APIError("required_answers_missing", 422, review)
@@ -1395,7 +1440,7 @@ class API(BaseHTTPRequestHandler):
                               MAX(CASE WHEN s.construct='MCM' THEN ml.label_ar END) AS maturity_level
                        FROM assessments a JOIN instrument_versions v ON v.id=a.version_id
                        LEFT JOIN assessment_scores s ON s.assessment_id=a.id LEFT JOIN maturity_levels ml ON ml.id=s.maturity_level_id
-                       WHERE a.organization_id=? AND a.status='COMPLETED'{scope} GROUP BY a.id ORDER BY a.completed_at""",
+                       WHERE a.organization_id=? AND a.status='COMPLETED'{scope} GROUP BY a.id,v.id ORDER BY a.completed_at""",
                     params,
                 ).fetchall()
                 return self.send_json({"range": (query.get("range") or ["all"])[0], "history": [dict(row) for row in rows]})
@@ -1574,7 +1619,7 @@ class API(BaseHTTPRequestHandler):
                     "assessments": db.execute("SELECT COUNT(*) FROM assessments").fetchone()[0],
                     "active_sessions": db.execute("SELECT COUNT(*) FROM sessions WHERE expires_at>?", (now(),)).fetchone()[0],
                     "configuration": {row["key"]: json.loads(row["value_json"]) for row in db.execute("SELECT key,value_json FROM system_configuration")},
-                    "health": {"database": "ok", "storage": "sqlite-local" if not os.environ.get("VERCEL") else "sqlite-ephemeral-warning"},
+                    "health": {"database": "ok", "storage": config.STORAGE_MODE},
                 })
             if path == "/api/admin/organizations" and method == "GET":
                 rows = db.execute("SELECT o.*,COUNT(DISTINCT m.user_id) AS users,COUNT(DISTINCT a.id) AS assessments FROM organizations o LEFT JOIN memberships m ON m.organization_id=o.id LEFT JOIN assessments a ON a.organization_id=o.id GROUP BY o.id ORDER BY o.id DESC").fetchall()
