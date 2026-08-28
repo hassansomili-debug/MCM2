@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -16,7 +17,7 @@ from http.server import ThreadingHTTPServer
 
 from mcm import config
 from mcm.api import API
-from mcm.database import init_db
+from mcm.database import _migrate_legacy, init_db
 from mcm.scoring import _normalize
 
 
@@ -75,7 +76,10 @@ class PlatformJourneyTests(unittest.TestCase):
         created = self.request("POST", "/api/assessments", {"assessment_type": "FULL"}, token, 201)
         assessment_id = created["id"]
         detail = self.request("GET", f"/api/assessments/{assessment_id}", token=token)
-        self.assertEqual(51, len(detail["items"]))
+        self.assertEqual(67, len(detail["items"]))
+        self.assertEqual(12, sum(item["construct"] == "ENABLER" for item in detail["items"]))
+        self.assertEqual(12, sum(item["construct"] == "OUTCOME" for item in detail["items"]))
+        self.assertEqual(3, sum(item["response_type"] == "LIKERT_RELATIVE" for item in detail["items"]))
         first_ten = [{"item_id": item["id"], "value": 4} for item in detail["items"][:10]]
         save = self.request("POST", f"/api/assessments/{assessment_id}/answers", {"answers": first_ten}, token)
         self.assertEqual(10, save["saved"])
@@ -98,6 +102,12 @@ class PlatformJourneyTests(unittest.TestCase):
         self.assertEqual(-25.0, results["relationship"]["efficiency_minus_maturity"])
         self.assertEqual(7, len(results["scores"]["MCM"]["dimensions"]))
         self.assertEqual(5, len(results["scores"]["SMCE"]["dimensions"]))
+        self.assertEqual(4, len(results["scores"]["ENABLER"]["dimensions"]))
+        self.assertEqual(4, len(results["scores"]["OUTCOME"]["dimensions"]))
+        self.assertEqual("0.2", results["source_instrument_version"])
+        self.assertEqual("PROVISIONAL_NOT_VALIDATED", results["validation_status"])
+        self.assertEqual(3, len(results["dashboard"]["opportunities"]))
+        self.assertEqual({"0-30", "31-90", "3-6"}, set(results["dashboard"]["roadmap"]))
         roadmap = self.request("GET", f"/api/roadmap/{assessment_id}", token=token)
         self.assertEqual(7, sum(len(items) for items in roadmap["roadmap"].values()))
         report = self.request("POST", "/api/reports", {"assessment_id": assessment_id, "report_type": "EXECUTIVE"}, token, 201)
@@ -109,6 +119,10 @@ class PlatformJourneyTests(unittest.TestCase):
         benchmark = self.request("GET", f"/api/benchmark/{assessment_id}", token=token)
         self.assertFalse(benchmark["available"])
         self.assertEqual("NON_REAL_ASSESSMENT", benchmark["reason"])
+        ai_plan = self.request("POST", f"/api/assessments/{assessment_id}/ai-plan", {}, token)
+        self.assertEqual("deterministic", ai_plan["plan"]["generation"]["mode"])
+        self.assertTrue(ai_plan["plan"]["safeguards"]["score_unchanged"])
+        self.assertNotIn("organization_name", json.dumps(ai_plan["plan"]))
 
         admin = self.login()
         export = self.request("POST", "/api/research/exports", {"format": "XLSX", "data_origin": "TEST"}, admin, 201)
@@ -132,6 +146,11 @@ class PlatformJourneyTests(unittest.TestCase):
             syntax = archive.read("import.sps").decode()
             self.assertIn("F12.2", syntax)
             self.assertIn("VALUE LABELS", syntax)
+            self.assertIn("Does not apply at all", syntax)
+            self.assertIn("Much worse than major competitors", syntax)
+        statistics = self.request("GET", "/api/research/statistics?data_origin=TEST", token=admin)
+        self.assertGreaterEqual(statistics["MCM"]["n"], 1)
+        self.assertGreaterEqual(statistics["SMCE"]["n"], 1)
 
     def test_registration_rbac_tenant_boundary_and_security(self):
         registered = self.request("POST", "/api/auth/register", {
@@ -221,32 +240,58 @@ class PlatformJourneyTests(unittest.TestCase):
         self.assertEqual(100.0, _normalize(5, 1, 5, False))
         self.assertEqual(100.0, _normalize(1, 1, 5, True))
 
+    def test_legacy_global_dimension_constraint_is_migrated(self):
+        db = sqlite3.connect(":memory:")
+        db.row_factory = sqlite3.Row
+        db.executescript("""
+            CREATE TABLE instrument_versions(id INTEGER PRIMARY KEY, version TEXT);
+            INSERT INTO instrument_versions VALUES (1,'0.3.0');
+            CREATE TABLE dimensions(
+              id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE, construct TEXT NOT NULL,
+              name TEXT NOT NULL, version_id INTEGER, name_en TEXT, weight REAL DEFAULT 1,
+              source_type TEXT, source_reference TEXT, sort_order INTEGER DEFAULT 0
+            );
+            INSERT INTO dimensions(id,code,construct,name,version_id) VALUES (1,'MCM01','MCM','قديم',1);
+            CREATE TABLE memberships(user_id INTEGER, organization_id INTEGER, role TEXT);
+        """)
+        _migrate_legacy(db)
+        db.execute("INSERT INTO dimensions(code,construct,name,version_id) VALUES ('MCM01','MCM','جديد',2)")
+        self.assertEqual(2, db.execute("SELECT COUNT(*) FROM dimensions WHERE code='MCM01'").fetchone()[0])
+        db.close()
+
     def test_direct_participant_flow_demographics_admin_and_no_sara_demo(self):
         public_config = self.request("GET", "/api/public-config")
         self.assertTrue(public_config["direct_participant_enabled"])
         self.assertNotIn("demo_email", public_config)
         missing_consent = self.request("POST", "/api/public/assessments", {
             "organization_name": "منشأة مباشرة", "sector": "التقنية", "firm_size": "SMALL",
-            "firm_age_years": 4, "region": "الرياض", "social_platform_count": 3,
+            "employee_count": 25, "firm_age_years": 4, "business_model": "B2B", "region": "الرياض", "social_platform_count": 3,
+            "social_team_size": 2, "regulated_sector": "NO",
             "respondent_role": "مدير تسويق", "service_consent": False,
-            "enablers": {"leadership_support": 4, "human_competencies": 3, "technology_infrastructure": 4, "data_readiness": 3},
         }, expected=422)
         self.assertEqual("service_consent_required", missing_consent["error"])
         created = self.request("POST", "/api/public/assessments", {
             "organization_name": "منشأة مباشرة", "sector": "التقنية", "firm_size": "SMALL",
-            "firm_age_years": 4, "region": "الرياض", "social_platform_count": 3,
+            "employee_count": 25, "firm_age_years": 4, "business_model": "B2B", "region": "الرياض", "social_platform_count": 3,
+            "social_team_size": 2, "regulated_sector": "NO",
             "respondent_role": "مدير تسويق", "service_consent": True, "research_consent": True,
-            "enablers": {"leadership_support": 4, "human_competencies": 3, "technology_infrastructure": 4, "data_readiness": 3},
         }, expected=201)
         participant = self.request("GET", f"/api/participant/session/{created['token']}")
-        self.assertEqual(4, sum(1 for item in participant["responses"].values() if item["value"] is not None))
+        self.assertEqual(0, len(participant["responses"]))
+        self.assertEqual(67, len(participant["items"]))
+        self.assertEqual(12, sum(item["construct"] == "ENABLER" for item in participant["items"]))
         self.assertEqual(4, participant["context"]["firm_age_years"])
-        answers = [{"item_id": item["id"], "value": 4} for item in participant["items"] if item["construct"] != "ENABLER"]
+        self.assertEqual(25, participant["context"]["employee_count"])
+        self.assertEqual("B2B", participant["context"]["business_model"])
+        answers = [{"item_id": item["id"], "value": 4} for item in participant["items"]]
+        answers[0] = {"item_id": participant["items"][0]["id"], "missing_type": "DONT_KNOW"}
         self.request("POST", f"/api/participant/session/{created['token']}/answers", {"answers": answers})
         result = self.request("POST", f"/api/participant/session/{created['token']}/submit", {})
         self.assertTrue(result["assessment_complete"])
-        self.assertIn(result["scores"]["MCM"]["maturity_level"]["code"], {"REACTIVE", "RESPONSIVE", "MANAGED_INTEGRATED", "PROACTIVE_ADAPTIVE", "INSTITUTIONALISED_INTELLIGENT"})
+        self.assertEqual("PROACTIVE_ADAPTIVE", result["scores"]["MCM"]["maturity_level"]["code"])
         self.assertEqual("MCM_TO_SMCE_PROPOSED_POSITIVE_EFFECT", result["relationship"]["model"])
+        self.assertEqual(4, len(result["dashboard"]["enablers"]["dimensions"]))
+        self.assertEqual(5, len(result["dashboard"]["priorities"]))
         returning = self.request("GET", f"/api/participant/session/{created['token']}")
         self.assertIsNotNone(returning["result"])
 

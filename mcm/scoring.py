@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import date, timedelta
 
 from .database import get_config, now
+from .instrument_v02 import METADATA as INSTRUMENT_METADATA
 
 
 SCORING_METHOD = "MCM_DETERMINISTIC_1.0"
@@ -26,7 +27,9 @@ def assessment_review(db, assessment_id: int, participant_id: int | None = None)
         "SELECT id,code,construct,dimension_code,required FROM items WHERE version_id=? ORDER BY sort_order,id",
         (assessment["version_id"],),
     ).fetchall()
-    response_query = "SELECT item_id FROM responses WHERE assessment_id=? AND missing_type IS NULL AND (numeric_value IS NOT NULL OR text_value IS NOT NULL)"
+    # An explicit scientific missing response ("not applicable" or "don't
+    # know") completes the item, but is excluded from every score below.
+    response_query = "SELECT item_id FROM responses WHERE assessment_id=? AND (missing_type IS NOT NULL OR numeric_value IS NOT NULL OR text_value IS NOT NULL)"
     response_params: list[int] = [assessment_id]
     if participant_id is not None:
         response_query += " AND participant_id=?"
@@ -83,7 +86,7 @@ def calculate_scores(db, assessment_id: int) -> dict:
         """SELECT i.id,i.construct,i.dimension_code,i.reverse_coded,i.weight,i.min_value,i.max_value,
                   r.participant_id,r.numeric_value,r.missing_type
            FROM items i LEFT JOIN responses r ON r.item_id=i.id AND r.assessment_id=?
-           WHERE i.version_id=? AND i.construct IN ('MCM','SMCE')
+           WHERE i.version_id=? AND i.construct IN ('MCM','SMCE','ENABLER','OUTCOME')
            ORDER BY i.sort_order,i.id""",
         (assessment_id, assessment["version_id"]),
     ).fetchall()
@@ -215,6 +218,20 @@ def _materialize_priorities(db, assessment_id: int, version_id: int) -> None:
     db.execute("DELETE FROM assessment_recommendations WHERE assessment_id=?", (assessment_id,))
     db.execute("DELETE FROM roadmap_items WHERE assessment_id=?", (assessment_id,))
     weights = get_config(db, "PRIORITY_WEIGHTS", {"gap": .45, "impact": .25, "dependency": .15, "effort": .10, "confidence": .05})
+    maturity_total = db.execute(
+        "SELECT total_score FROM assessment_scores WHERE assessment_id=? AND construct='MCM'",
+        (assessment_id,),
+    ).fetchone()
+    current_total = float(maturity_total["total_score"]) if maturity_total else 0.0
+    next_level = db.execute(
+        """SELECT min_score FROM maturity_levels
+           WHERE version_id=? AND min_score>? ORDER BY level_order LIMIT 1""",
+        (version_id, current_total),
+    ).fetchone()
+    # At the fifth stage the target becomes maintenance of the 100-point
+    # ceiling. For all other stages the gap is to the next stage, not an
+    # arbitrary fixed target.
+    target_score = float(next_level["min_score"]) if next_level else 100.0
     dimensions = db.execute(
         "SELECT dimension_code,score FROM dimension_scores WHERE assessment_id=? AND construct='MCM' ORDER BY score",
         (assessment_id,),
@@ -227,7 +244,7 @@ def _materialize_priorities(db, assessment_id: int, version_id: int) -> None:
         ).fetchone()
         if not recommendation:
             continue
-        gap = max(0.0, 80.0 - float(row["score"]))
+        gap = max(0.0, target_score - float(row["score"]))
         impact = {"HIGH": 100, "MEDIUM": 65, "LOW": 35}.get(recommendation["expected_impact"], 65)
         effort_bonus = {"LOW": 100, "MEDIUM": 65, "HIGH": 35}.get(recommendation["effort"], 65)
         dependency = 100 if row["dimension_code"] in ("MCM01", "MCM03", "MCM07") else 60
@@ -246,7 +263,7 @@ def _materialize_priorities(db, assessment_id: int, version_id: int) -> None:
     for rank, (priority, gap, recommendation) in enumerate(ranked, 1):
         db.execute(
             "INSERT INTO assessment_recommendations VALUES (?,?,?,?,?,?)",
-            (assessment_id, recommendation["id"], priority, round(gap, 2), rank, "ترتيب حتمي مبني على الفجوة والأثر والاعتمادية والجهد والثقة."),
+            (assessment_id, recommendation["id"], priority, round(gap, 2), rank, f"ترتيب حتمي نحو عتبة المرحلة التالية ({target_score:g}) مبني على الفجوة والأثر والاعتمادية والجهد والثقة."),
         )
         if rank <= 2:
             horizon, target = "0-30", today + timedelta(days=30)
@@ -304,7 +321,7 @@ def score_payload(db, assessment_id: int) -> dict:
            FROM assessment_scores s LEFT JOIN maturity_levels m ON m.id=s.maturity_level_id WHERE s.assessment_id=?""",
         (assessment_id,),
     )}
-    grouped = {"MCM": [], "SMCE": []}
+    grouped = {"MCM": [], "SMCE": [], "ENABLER": [], "OUTCOME": []}
     for row in dimension_rows:
         if row["construct"] in grouped:
             grouped[row["construct"]].append({
@@ -342,11 +359,78 @@ def score_payload(db, assessment_id: int) -> dict:
         "SELECT code,label_ar,label_en,min_score,max_score,level_order FROM maturity_levels WHERE version_id=? ORDER BY level_order",
         (assessment["version_id"],),
     )]
+    current_level_order = int(mcm["level_order"]) if mcm and mcm["level_order"] else None
+    next_stage = next(
+        (level for level in progression if current_level_order is not None and int(level["level_order"]) == current_level_order + 1),
+        None,
+    )
+    gap_to_next = None
+    if mcm_total is not None:
+        gap_to_next = round(max(0.0, float(next_stage["min_score"]) - mcm_total), 2) if next_stage else round(max(0.0, 100.0 - mcm_total), 2)
+
+    priorities = [dict(row) for row in db.execute(
+        """SELECT ar.rank,ar.priority_score,ar.gap,ar.rationale,r.dimension_code,
+                  r.problem AS title,r.action,r.suggested_owner AS owner,
+                  r.expected_impact AS impact,r.effort,r.kpi,ds.score AS current_score,
+                  COALESCE(d.name,r.dimension_code) AS dimension_name
+           FROM assessment_recommendations ar
+           JOIN recommendations r ON r.id=ar.recommendation_id
+           LEFT JOIN dimension_scores ds ON ds.assessment_id=ar.assessment_id AND ds.dimension_code=r.dimension_code
+           LEFT JOIN dimensions d ON d.version_id=? AND d.code=r.dimension_code
+           WHERE ar.assessment_id=? ORDER BY ar.rank LIMIT 5""",
+        (assessment["version_id"], assessment_id),
+    )]
+    roadmap = {"0-30": [], "31-90": [], "3-6": []}
+    for row in db.execute(
+        """SELECT horizon,title,description,owner,status,target_date,impact,effort,kpi,sort_order
+           FROM roadmap_items WHERE assessment_id=? ORDER BY sort_order,id""",
+        (assessment_id,),
+    ):
+        roadmap.setdefault(row["horizon"], []).append(dict(row))
+
+    mcm_dimensions = grouped["MCM"]
+    strengths = sorted(mcm_dimensions, key=lambda item: float(item["score"]), reverse=True)[:2]
+    opportunities = sorted(mcm_dimensions, key=lambda item: float(item["score"]))[:3]
+
+    def construct_average(construct: str):
+        values = [float(item["score"]) for item in grouped[construct]]
+        return round(sum(values) / len(values), 2) if values else None
+
+    dashboard = {
+        "summary": {
+            "mcm_total": mcm_total,
+            "smce_total": smce_total,
+            "current_stage": ({"code": mcm["level_code"], "label_ar": mcm["label_ar"], "order": mcm["level_order"]} if mcm and mcm["level_code"] else None),
+            "next_stage": ({"code": next_stage["code"], "label_ar": next_stage["label_ar"], "order": next_stage["level_order"]} if next_stage else None),
+            "gap_to_next_stage": gap_to_next,
+        },
+        "strengths": strengths,
+        "opportunities": opportunities,
+        "enablers": {"total": construct_average("ENABLER"), "dimensions": grouped["ENABLER"]},
+        "outcomes": {"total": construct_average("OUTCOME"), "dimensions": grouped["OUTCOME"]},
+        "priorities": priorities,
+        "roadmap": roadmap,
+        "charts": {
+            "mcm_radar": mcm_dimensions,
+            "smce_bars": grouped["SMCE"],
+            "enabler_bars": grouped["ENABLER"],
+            "outcome_bars": grouped["OUTCOME"],
+        },
+        "improvement_method": "DETERMINISTIC_GAP_TO_NEXT_STAGE_1.0",
+        "ai": {
+            "status": "OPTIONAL_NOT_CONFIGURED",
+            "role": "اقتراح صياغات خطة التحسين فقط؛ لا يغيّر الدرجة أو التصنيف.",
+            "privacy": "يرسل عند التفعيل درجات مجمعة وفئات عامة فقط، دون الاسم أو البريد أو الإجابات الخام.",
+        },
+        "evidence_notice": "الخطة تشخيصية إرشادية مبنية على فجوات الأبعاد، وتحتاج اعتمادًا بشريًا قبل التنفيذ.",
+    }
     return {
         "assessment_id": assessment_id,
         "organization_name": assessment["organization_name"],
         "instrument_version_id": assessment["version_id"],
         "instrument_version": assessment["instrument_version"],
+        "source_instrument_version": INSTRUMENT_METADATA["version"],
+        "validation_status": INSTRUMENT_METADATA["validation_status"],
         "instrument_status": assessment["instrument_status"],
         "assessment_status": assessment["status"],
         "completed_at": assessment["completed_at"],
@@ -358,10 +442,13 @@ def score_payload(db, assessment_id: int) -> dict:
                 "dimensions": grouped["MCM"],
             },
             "SMCE": {"total": smce_total, "dimensions": grouped["SMCE"]},
+            "ENABLER": {"total": construct_average("ENABLER"), "dimensions": grouped["ENABLER"]},
+            "OUTCOME": {"total": construct_average("OUTCOME"), "dimensions": grouped["OUTCOME"]},
         },
         "context": dict(context) if context else None,
         "relationship": relationship,
         "maturity_progression": progression,
+        "dashboard": dashboard,
         "classification_notice": "تصنيف تشخيصي أولي ضمن نموذج بحثي قيد التحقق الكمي؛ لا يمثل إثباتًا سببيًا أو اعتمادًا علميًا نهائيًا.",
     }
 

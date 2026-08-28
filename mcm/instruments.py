@@ -18,6 +18,18 @@ SUPPORTED_TABLES = {
     "PROFILE_FIELDS",
     "MATURITY_LEVELS",
 }
+SUPPORTED_SCHEMAS = {"MCM_IMPORT_DOCX_1.1"}
+CONSTRUCT_ALIASES = {
+    "MCM": "MCM",
+    "SMCE": "SMCE",
+    "ENABLER": "ENABLER",
+    "OUTCOME": "OUTCOME",
+    "OPTIONAL_OUTCOME": "OUTCOME",
+}
+SCALE_RESPONSE_TYPES = {
+    "LIKERT_5_EXTENT": "LIKERT_EXTENT",
+    "RELATIVE_5_COMPETITOR": "LIKERT_RELATIVE",
+}
 NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 
 
@@ -29,7 +41,7 @@ class InstrumentImportError(ValueError):
 
 
 def _text(node) -> str:
-    return " ".join(filter(None, (part.text for part in node.iter(f"{NS}t")))).strip()
+    return "".join(part.text or "" for part in node.iter(f"{NS}t")).strip()
 
 
 def _table(node) -> list[dict]:
@@ -45,6 +57,145 @@ def _table(node) -> list[dict]:
         {header: (values[index].strip() if index < len(values) else "") for index, header in enumerate(headers) if header}
         for values in raw_rows
     ]
+
+
+def _first(row: dict, *keys: str, default=""):
+    for key in keys:
+        value = row.get(key)
+        if value is not None and str(value).strip() != "":
+            return value
+    return default
+
+
+def _construct(value) -> str:
+    raw = str(value or "").strip().upper()
+    return CONSTRUCT_ALIASES.get(raw, raw)
+
+
+def _metadata_rows(rows) -> list[dict]:
+    if isinstance(rows, dict):
+        return [dict(rows)]
+    rows = [dict(row) for row in rows or [] if isinstance(row, dict)]
+    if rows and all("key" in row and "value" in row for row in rows):
+        return [{str(row["key"]).strip(): row.get("value", "") for row in rows if str(row["key"]).strip()}]
+    return rows
+
+
+def _provisional_bands(level_count: int) -> list[tuple[float, float]]:
+    if level_count <= 0:
+        return []
+    step = 100.0 / level_count
+    return [
+        (round(index * step, 10), 100.01 if index == level_count - 1 else round((index + 1) * step, 10))
+        for index in range(level_count)
+    ]
+
+
+def _normalize_tables(tables: dict) -> dict:
+    """Map upload-package headers onto the platform's stable import aliases."""
+    normalized = {
+        name: [dict(row) for row in rows or [] if isinstance(row, dict)]
+        for name, rows in tables.items()
+        if name in SUPPORTED_TABLES and isinstance(rows, (list, tuple))
+    }
+    normalized["INSTRUMENT_METADATA"] = _metadata_rows(tables.get("INSTRUMENT_METADATA", []))
+
+    for row in normalized.get("DIMENSIONS", []):
+        source_construct = _first(row, "construct", "construct_type", "measure")
+        row.update(
+            code=_first(row, "code", "dimension_code"),
+            construct=_construct(source_construct),
+            name_ar=_first(row, "name_ar", "arabic_name", "name"),
+            name_en=_first(row, "name_en", "english_name"),
+            display_order=_first(row, "display_order", "sort_order", "order", default="0"),
+        )
+        if str(source_construct).strip().upper() == "OPTIONAL_OUTCOME":
+            row["source_construct"] = "OPTIONAL_OUTCOME"
+
+    for row in normalized.get("ITEMS", []):
+        source_construct = _first(row, "construct", "construct_type", "measure")
+        row.update(
+            code=_first(row, "code", "item_code"),
+            item_code=_first(row, "item_code", "code"),
+            dimension_code=_first(row, "dimension_code", "dimension"),
+            construct=_construct(source_construct),
+            prompt_ar=_first(row, "prompt_ar", "arabic_item", "wording_ar", "prompt"),
+            prompt_en=_first(row, "prompt_en", "english_item", "wording_en"),
+            display_order=_first(row, "display_order", "sort_order", "order", default="0"),
+        )
+        if str(source_construct).strip().upper() == "OPTIONAL_OUTCOME":
+            row["source_construct"] = "OPTIONAL_OUTCOME"
+
+    scale_ranges: dict[str, tuple[float, float]] = {}
+    for row in normalized.get("SCALE_VALUES", []):
+        scale_code = str(_first(row, "scale_code", "scale")).strip()
+        row["scale_code"] = scale_code
+        try:
+            value = float(row.get("value"))
+        except (TypeError, ValueError):
+            continue
+        minimum, maximum = scale_ranges.get(scale_code, (value, value))
+        scale_ranges[scale_code] = (min(minimum, value), max(maximum, value))
+
+    for row in normalized.get("ITEM_SETTINGS", []):
+        item_code = _first(row, "item_code", "code")
+        scale_code = str(_first(row, "scale_code", "scale")).strip()
+        response_type = str(_first(row, "response_type", default="LIKERT")).strip().upper()
+        if response_type == "LIKERT" and scale_code in SCALE_RESPONSE_TYPES:
+            response_type = SCALE_RESPONSE_TYPES[scale_code]
+        row.update(item_code=item_code, code=item_code, scale_code=scale_code, response_type=response_type)
+        if scale_code in scale_ranges:
+            row.setdefault("min_value", scale_ranges[scale_code][0])
+            row.setdefault("max_value", scale_ranges[scale_code][1])
+
+    settings_by_code = {
+        row.get("item_code"): row
+        for row in normalized.get("ITEM_SETTINGS", [])
+        if row.get("item_code")
+    }
+    for row in normalized.get("ITEMS", []):
+        setting = settings_by_code.get(row.get("code"), {})
+        source_type = _first(setting, "source_type", default=_first(row, "source_type"))
+        source_reference = _first(setting, "source_reference", default=_first(row, "source_reference"))
+        row.update(
+            scale_code=setting.get("scale_code"),
+            response_type=setting.get("response_type", row.get("response_type", "LIKERT")),
+            source_type=source_type,
+            source_reference=source_reference,
+            source=":".join(filter(None, (str(source_type), str(source_reference)))) or None,
+            lifecycle_status=_first(setting, "item_status", default=_first(row, "lifecycle_status", default="EXPERT_REVIEW")),
+        )
+
+    for row in normalized.get("PROFILE_FIELDS", []):
+        row.update(
+            code=_first(row, "code", "field_code"),
+            construct=_construct(_first(row, "construct", "construct_type", default="CONTEXT")),
+            label_ar=_first(row, "label_ar", "arabic_label", "label"),
+            label_en=_first(row, "label_en", "english_label"),
+        )
+
+    levels = normalized.get("MATURITY_LEVELS", [])
+    bands = _provisional_bands(len(levels))
+    for index, row in enumerate(levels):
+        source_minimum = _first(row, "min_score", "min")
+        source_maximum = _first(row, "max_score", "max")
+        threshold_status = str(_first(row, "threshold_status")).strip().upper()
+        row.update(
+            code=_first(row, "code", "level_code"),
+            level_order=_first(row, "level_order", "level_number", "order", default=str(index + 1)),
+            label_ar=_first(row, "label_ar", "name_ar"),
+            label_en=_first(row, "label_en", "name_en"),
+            threshold_status=threshold_status,
+            source_min_score=source_minimum,
+            source_max_score=source_maximum,
+        )
+        if not source_minimum and not source_maximum and threshold_status == "PROVISIONAL_LABEL_ONLY":
+            row["min_score"], row["max_score"] = bands[index]
+            row["provisional_threshold_applied"] = True
+        else:
+            row["min_score"] = source_minimum
+            row["max_score"] = source_maximum
+    return normalized
 
 
 def parse_docx_base64(encoded: str, filename: str, mime_type: str | None = None) -> dict:
@@ -102,37 +253,65 @@ def parse_docx_base64(encoded: str, filename: str, mime_type: str | None = None)
 
 
 def validate_tables(tables: dict, filename: str = "instrument.docx") -> dict:
+    if not isinstance(tables, dict):
+        return {
+            "tables": {},
+            "errors": [{"code": "tables_object_required"}],
+            "warnings": [],
+            "stats": {"filename": filename, "tables": 0, "dimensions": 0, "items": 0},
+            "valid": False,
+        }
+    tables = _normalize_tables(tables)
     errors = []
     warnings = []
     for required in ("DIMENSIONS", "ITEMS", "ITEM_SETTINGS", "SCALE_VALUES", "MATURITY_LEVELS"):
         if not tables.get(required):
             errors.append({"code": "required_table_missing", "table": required})
+
+    metadata = (tables.get("INSTRUMENT_METADATA") or [{}])[0]
+    schema_version = str(metadata.get("schema_version") or "").strip()
+    if schema_version and schema_version not in SUPPORTED_SCHEMAS:
+        errors.append({"code": "unsupported_schema_version", "value": schema_version})
+
     dimensions = tables.get("DIMENSIONS", [])
     items = tables.get("ITEMS", [])
     settings = tables.get("ITEM_SETTINGS", [])
-    dimension_codes = [row.get("dimension_code") or row.get("code") for row in dimensions]
-    item_codes = [row.get("item_code") or row.get("code") for row in items]
-    setting_codes = {row.get("item_code") or row.get("code") for row in settings}
+    scales = tables.get("SCALE_VALUES", [])
+    levels = tables.get("MATURITY_LEVELS", [])
+    dimension_codes = [row.get("code") for row in dimensions]
+    item_codes = [row.get("code") for row in items]
+    raw_setting_codes = [row.get("item_code") or row.get("code") for row in settings]
+    setting_codes = set(raw_setting_codes)
     for label, values in (("dimension_code", dimension_codes), ("item_code", item_codes)):
         duplicates = sorted({value for value in values if value and values.count(value) > 1})
         if duplicates:
             errors.append({"code": "duplicate_codes", "field": label, "values": duplicates})
         if any(not value for value in values):
             errors.append({"code": "code_required", "field": label})
+    duplicate_settings = sorted({value for value in raw_setting_codes if value and raw_setting_codes.count(value) > 1})
+    if duplicate_settings:
+        errors.append({"code": "duplicate_codes", "field": "item_settings_code", "values": duplicate_settings})
+
     known_dimensions = set(filter(None, dimension_codes))
+    known_scales = {row.get("scale_code") for row in scales if row.get("scale_code")}
+    for dimension in dimensions:
+        construct = str(dimension.get("construct") or "").upper()
+        if construct not in CONSTRUCT_ALIASES.values():
+            errors.append({"code": "invalid_construct", "dimension": dimension.get("code"), "construct": construct})
     for index, item in enumerate(items, 1):
-        item_code = item.get("item_code") or item.get("code")
-        dimension_code = item.get("dimension_code") or item.get("dimension")
-        prompt_ar = item.get("prompt_ar") or item.get("wording_ar") or item.get("prompt")
-        construct = str(item.get("construct") or item.get("measure") or "").upper()
+        item_code = item.get("code")
+        dimension_code = item.get("dimension_code")
+        prompt_ar = item.get("prompt_ar")
+        construct = str(item.get("construct") or "").upper()
         if dimension_code not in known_dimensions:
             errors.append({"code": "unknown_dimension", "item": item_code, "dimension": dimension_code})
         if not prompt_ar:
             errors.append({"code": "arabic_prompt_required", "item": item_code or index})
-        if construct not in {"MCM", "SMCE", "ENABLER", "OUTCOME"}:
+        if construct not in CONSTRUCT_ALIASES.values():
             errors.append({"code": "invalid_construct", "item": item_code, "construct": construct})
         if item_code and item_code not in setting_codes:
             errors.append({"code": "item_settings_missing", "item": item_code})
+
     for setting in settings:
         weight = setting.get("weight", "1")
         try:
@@ -143,6 +322,62 @@ def validate_tables(tables: dict, filename: str = "instrument.docx") -> dict:
         reverse = str(setting.get("reverse_coded", "false")).lower()
         if reverse not in {"0", "1", "false", "true", "no", "yes"}:
             errors.append({"code": "invalid_reverse_flag", "item": setting.get("item_code")})
+        scale_code = setting.get("scale_code")
+        if not scale_code:
+            errors.append({"code": "scale_code_required", "item": setting.get("item_code")})
+        elif scale_code not in known_scales:
+            errors.append({"code": "unknown_scale", "item": setting.get("item_code"), "scale": scale_code})
+
+    orphan_settings = sorted(setting_codes - set(filter(None, item_codes)))
+    if orphan_settings:
+        warnings.append({"code": "orphan_item_settings", "items": orphan_settings})
+
+    scale_values: dict[str, list[float]] = {}
+    for row in scales:
+        scale_code = row.get("scale_code")
+        try:
+            value = float(row.get("value"))
+        except (TypeError, ValueError):
+            errors.append({"code": "invalid_scale_value", "scale": scale_code, "value": row.get("value")})
+            continue
+        scale_values.setdefault(scale_code, []).append(value)
+    for scale_code, values in scale_values.items():
+        if len(values) != len(set(values)):
+            errors.append({"code": "duplicate_scale_values", "scale": scale_code})
+
+    for index, level in enumerate(levels, 1):
+        if level.get("provisional_threshold_applied"):
+            warnings.append(
+                {
+                    "code": "provisional_maturity_thresholds_applied",
+                    "level": level.get("code"),
+                    "source_thresholds": "blank",
+                }
+            )
+        try:
+            minimum = float(level.get("min_score"))
+            maximum = float(level.get("max_score"))
+            if minimum >= maximum:
+                raise ValueError
+        except (TypeError, ValueError):
+            errors.append({"code": "invalid_maturity_threshold", "row": index, "level": level.get("code")})
+
+    expected_total = metadata.get("total_item_count")
+    if str(expected_total).strip():
+        try:
+            if int(expected_total) != len(items):
+                errors.append({"code": "total_item_count_mismatch", "expected": int(expected_total), "actual": len(items)})
+        except (TypeError, ValueError):
+            errors.append({"code": "invalid_total_item_count", "value": expected_total})
+    core_count = sum(row.get("construct") in {"MCM", "SMCE"} for row in items)
+    expected_core = metadata.get("core_item_count")
+    if str(expected_core).strip():
+        try:
+            if int(expected_core) != core_count:
+                errors.append({"code": "core_item_count_mismatch", "expected": int(expected_core), "actual": core_count})
+        except (TypeError, ValueError):
+            errors.append({"code": "invalid_core_item_count", "value": expected_core})
+
     missing_optional = sorted(SUPPORTED_TABLES - set(tables))
     for table in missing_optional:
         if table not in {error.get("table") for error in errors}:
@@ -152,7 +387,12 @@ def validate_tables(tables: dict, filename: str = "instrument.docx") -> dict:
         "tables": len(tables),
         "dimensions": len(dimensions),
         "items": len(items),
-        "mcm_items": sum(str(row.get("construct") or row.get("measure") or "").upper() == "MCM" for row in items),
-        "smce_items": sum(str(row.get("construct") or row.get("measure") or "").upper() == "SMCE" for row in items),
+        "mcm_items": sum(row.get("construct") == "MCM" for row in items),
+        "smce_items": sum(row.get("construct") == "SMCE" for row in items),
+        "enabler_items": sum(row.get("construct") == "ENABLER" for row in items),
+        "outcome_items": sum(row.get("construct") == "OUTCOME" for row in items),
+        "core_items": core_count,
+        "schema_version": schema_version or None,
+        "instrument_version": metadata.get("version") or metadata.get("instrument_version"),
     }
     return {"tables": tables, "errors": errors, "warnings": warnings, "stats": stats, "valid": not errors}

@@ -4,6 +4,15 @@ import os
 import secrets
 from pathlib import Path
 
+from .instrument_v02 import (
+    DIMENSIONS as INSTRUMENT_DIMENSIONS,
+    ITEMS as INSTRUMENT_ITEMS,
+    MATURITY_LEVELS as INSTRUMENT_MATURITY_LEVELS,
+    METADATA as INSTRUMENT_METADATA,
+    PROFILE_FIELDS as INSTRUMENT_PROFILE_FIELDS,
+    SCALE_DEFINITIONS,
+)
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -40,6 +49,18 @@ INVITATION_TTL = int(os.environ.get("MCM_INVITATION_TTL", str(7 * 86_400)))
 RESET_TTL = int(os.environ.get("MCM_RESET_TTL", "1800"))
 ALLOWED_ORIGIN = os.environ.get("MCM_ALLOWED_ORIGIN", "same-origin")
 MAX_DOCX_BYTES = int(os.environ.get("MCM_MAX_DOCX_BYTES", str(8 * 1024 * 1024)))
+AI_PROVIDER = os.environ.get("MCM_AI_PROVIDER", "off").strip().lower()
+if AI_PROVIDER not in {"off", "groq", "gemini", "ollama"}:
+    AI_PROVIDER = "off"
+AI_MODEL = os.environ.get("MCM_AI_MODEL", "").strip() or None
+AI_BASE_URL = os.environ.get("MCM_AI_BASE_URL", "").strip() or None
+AI_TIMEOUT = max(3.0, min(30.0, float(os.environ.get("MCM_AI_TIMEOUT", "15"))))
+AI_CLOUD_KEY_CONFIGURED = bool(
+    os.environ.get("MCM_AI_API_KEY")
+    or (AI_PROVIDER == "groq" and os.environ.get("GROQ_API_KEY"))
+    or (AI_PROVIDER == "gemini" and os.environ.get("GEMINI_API_KEY"))
+)
+AI_AVAILABLE = AI_PROVIDER == "ollama" or (AI_PROVIDER in {"groq", "gemini"} and AI_CLOUD_KEY_CONFIGURED)
 
 PLATFORM_ADMIN_EMAIL = os.environ.get("MCM_ADMIN_EMAIL", "hmsomili@gmail.com").lower()
 PLATFORM_ADMIN_NAME = os.environ.get("MCM_ADMIN_NAME", "مدير المنصة")
@@ -69,122 +90,32 @@ ROLE_ALIASES = {
 }
 ROLES = tuple(sorted(set(ROLE_ALIASES.values())))
 
-MCM_DIMENSIONS = [
-    ("MCM01", "الحوكمة والتوجيه الاستراتيجي", "Strategic governance and direction"),
-    ("MCM02", "ذكاء أصحاب المصلحة والسياق", "Stakeholder and context intelligence"),
-    ("MCM03", "حوكمة المعلومات والنزاهة", "Information governance and integrity"),
-    ("MCM04", "التنسيق ورحلة العميل", "Coordination and customer journey"),
-    ("MCM05", "مواءمة الوعد والتجربة", "Promise and experience alignment"),
-    ("MCM06", "الأدلة والتعلم التكيفي", "Evidence and adaptive learning"),
-    ("MCM07", "المأسسة وقابلية التوسع", "Institutionalisation and scalability"),
-]
+def _dimension_tuples(construct: str):
+    return [
+        (row["code"], row["name_ar"], row["name_en"])
+        for row in INSTRUMENT_DIMENSIONS
+        if row["construct"] == construct
+    ]
 
-SMCE_DIMENSIONS = [
-    ("SMCE01", "كفاءة الاستجابة والحل", "Response and resolution efficiency"),
-    ("SMCE02", "جودة المعنى والتفاعل", "Meaning and interaction quality"),
-    ("SMCE03", "كفاءة الفعل", "Action efficiency"),
-    ("SMCE04", "انخفاض الاحتكاك الاتصالي", "Low communication friction"),
-    ("SMCE05", "كفاءة الموارد وتحقيق الأهداف", "Resource and goal efficiency"),
-]
 
-ENABLER_DIMENSIONS = [
-    ("ENA01", "دعم القيادة", "Leadership support"),
-    ("ENA02", "الكفاءات البشرية", "Human competencies"),
-    ("ENA03", "البنية التحتية التقنية", "Technology infrastructure"),
-    ("ENA04", "جاهزية البيانات", "Data readiness"),
-]
-
-OUTCOME_DIMENSIONS = [
-    ("OUT01", "رضا أصحاب المصلحة", "Stakeholder satisfaction"),
-    ("OUT02", "الثقة والسمعة", "Trust and reputation"),
-    ("OUT03", "كفاءة الإنفاق", "Spend efficiency"),
-    ("OUT04", "أثر الأعمال", "Business impact"),
-]
-
+MCM_DIMENSIONS = _dimension_tuples("MCM")
+SMCE_DIMENSIONS = _dimension_tuples("SMCE")
+ENABLER_DIMENSIONS = _dimension_tuples("ENABLER")
+OUTCOME_DIMENSIONS = _dimension_tuples("OUTCOME")
 MATURITY_LEVELS = [
-    ("REACTIVE", "تفاعلي", "Reactive", 0.0, 20.0, 1),
-    ("RESPONSIVE", "مستجيب", "Responsive", 20.0, 40.0, 2),
-    ("MANAGED_INTEGRATED", "مُدار ومتكامل", "Managed & Integrated", 40.0, 60.0, 3),
-    ("PROACTIVE_ADAPTIVE", "استباقي ومتكيّف", "Proactive & Adaptive", 60.0, 80.0, 4),
-    ("INSTITUTIONALISED_INTELLIGENT", "مؤسسي وذكي", "Institutionalised & Intelligent", 80.0, 100.01, 5),
+    (
+        row["code"], row["label_ar"], row["label_en"], row["min_score"],
+        row["max_score"], row["level_order"],
+    )
+    for row in INSTRUMENT_MATURITY_LEVELS
 ]
 
+# Compatibility views used by older maintenance utilities. The database seed
+# uses INSTRUMENT_ITEMS directly so item wording, English labels, scale type,
+# source references and ordering remain exactly tied to scientific v0.2.
 ITEM_PROMPTS = {
-    "MCM01": [
-        "ترتبط أهداف الاتصال مباشرة بالأهداف الاستراتيجية للمؤسسة.",
-        "توجد جهة واضحة تملك قرارات الاتصال التسويقي وتتابعها.",
-        "تُترجم الاستراتيجية إلى أولويات ومؤشرات اتصال قابلة للقياس.",
-        "تُراجع قرارات الاتصال دوريًا على مستوى القيادة.",
-    ],
-    "MCM02": [
-        "تُحدّث المؤسسة فهمها لاحتياجات أصحاب المصلحة بانتظام.",
-        "تُستخدم بيانات السوق والسياق في التخطيط للاتصال.",
-        "تُميّز الرسائل بحسب شرائح أصحاب المصلحة واحتياجاتهم.",
-        "تُرصد التغيرات الخارجية وتنعكس على القرارات الاتصالية.",
-    ],
-    "MCM03": [
-        "توجد مصادر معلومات معتمدة وموحدة للرسائل والحقائق.",
-        "تُراجع دقة المحتوى قبل نشره عبر القنوات.",
-        "توجد ملكية واضحة لتحديث المعلومات الاتصالية.",
-        "يمكن تتبع النسخ والاعتمادات والتغييرات على المحتوى.",
-    ],
-    "MCM04": [
-        "تعمل الفرق المختلفة وفق رحلة عميل واتصال مشتركة.",
-        "تنتقل معلومات العميل بسلاسة بين نقاط التماس.",
-        "توجد آلية لمعالجة التعارض بين القنوات والفرق.",
-        "تُصمم الرسائل والخدمات كتجربة مترابطة لا كأنشطة منفصلة.",
-    ],
-    "MCM05": [
-        "يتوافق الوعد التسويقي مع التجربة الفعلية التي يتلقاها العميل.",
-        "تُستخدم ملاحظات العملاء لتصحيح الفجوة بين الوعد والتجربة.",
-        "تتسق اللغة والنبرة مع مستوى الخدمة الفعلي.",
-        "تُختبر الرسائل مقابل قدرة المؤسسة على الوفاء بها.",
-    ],
-    "MCM06": [
-        "تُقاس النتائج الاتصالية بمؤشرات تتجاوز حجم النشاط.",
-        "تُستخدم الأدلة لتعديل الحملات والرسائل أثناء التنفيذ.",
-        "توجد دورات تعلم موثقة بعد المبادرات الاتصالية.",
-        "ترتبط التحليلات بقرارات ومالكين ومواعيد متابعة.",
-    ],
-    "MCM07": [
-        "تعتمد جودة الاتصال على عمليات مؤسسية لا على أفراد بعينهم.",
-        "توجد أدلة عمل وقوالب ومعايير قابلة للتكرار.",
-        "يمكن توسيع النشاط الاتصالي دون تراجع الاتساق والجودة.",
-        "تُبنى القدرات عبر التدريب ونقل المعرفة والتعاقب.",
-    ],
-    "SMCE01": [
-        "تستجيب فرق التواصل الاجتماعي ضمن أزمنة خدمة محددة.",
-        "تُنقل الحالات المعقدة إلى الجهة المناسبة دون فقد السياق.",
-        "تُغلق الاستفسارات والشكاوى بحل واضح ومتابعة مناسبة.",
-    ],
-    "SMCE02": [
-        "تعكس التفاعلات الرقمية فهمًا حقيقيًا لسياق العميل.",
-        "تحافظ الردود على نبرة إنسانية ومتسقة مع العلامة.",
-        "تتكيّف جودة الحوار مع اختلاف القناة والجمهور.",
-    ],
-    "SMCE03": [
-        "توجد صلاحيات وأدوات تمكّن الفريق من اتخاذ الإجراء بسرعة.",
-        "تقل التحويلات غير الضرورية بين الفرق عند خدمة العميل.",
-        "تُستخدم الأتمتة دون الإضرار بدقة الاستجابة أو إنسانيتها.",
-    ],
-    "SMCE04": [
-        "يصل العميل إلى المعلومة أو الجهة المطلوبة بأقل عدد ممكن من الخطوات.",
-        "تنخفض الحاجة إلى تكرار المعلومات عند الانتقال بين القنوات والفرق.",
-        "تُرصد نقاط الاحتكاك الاتصالي وتُعالج بصورة منتظمة.",
-    ],
-    "SMCE05": [
-        "تُستخدم الموارد الاتصالية بما يتناسب مع الأولويات والأثر المتوقع.",
-        "يمكن ربط أنشطة التواصل الاجتماعي بأهداف محددة وقابلة للقياس.",
-        "تُعاد موازنة الوقت والميزانية استنادًا إلى النتائج الفعلية.",
-    ],
-    "ENA01": ["توفر القيادة رعاية واضحة لتطوير الاتصال المؤسسي."],
-    "ENA02": ["تتوفر لدى العاملين الكفاءات البشرية اللازمة لتنفيذ الاتصال وتطويره."],
-    "ENA03": ["تدعم الأنظمة التقنية جمع البيانات وتبادلها بأمان."],
-    "ENA04": ["تتوفر بيانات محدثة وموثوقة وجاهزة لدعم القرارات الاتصالية."],
-    "OUT01": ["كيف تقيّم رضا أصحاب المصلحة عن الاتصال؟"],
-    "OUT02": ["كيف تقيّم أثر الاتصال على الثقة والسمعة؟"],
-    "OUT03": ["كيف تقيّم كفاءة استخدام ميزانية الاتصال؟"],
-    "OUT04": ["كيف تقيّم مساهمة الاتصال في نتائج الأعمال؟"],
+    code: [row["prompt_ar"] for row in INSTRUMENT_ITEMS if row["dimension_code"] == code]
+    for code, _, _ in MCM_DIMENSIONS + SMCE_DIMENSIONS + ENABLER_DIMENSIONS + OUTCOME_DIMENSIONS
 }
 
 RECOMMENDATIONS = {

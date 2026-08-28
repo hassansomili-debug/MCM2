@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from xml.sax.saxutils import escape
 
 from .database import assessment_research_eligible
+from .instrument_v02 import MATURITY_LEVELS, SCALE_DEFINITIONS
 from .scoring import diagnostic_payload, priority_payload, score_payload
 
 
@@ -148,9 +149,14 @@ def build_research_sheets(db, origin: str = "REAL") -> OrderedDict:
                 item_codes.append(row["code"])
     wide_base_headers = [
         "ASSESSMENT_ID", "PARTICIPANT_ID", "ORG_ID", "DATA_ORIGIN", "INSTRUMENT_VERSION", "COMPLETED_AT",
-        "SECTOR", "FIRM_SIZE", "FIRM_SIZE_CODE", "FIRM_AGE_YEARS", "REGION", "SOCIAL_PLATFORM_COUNT",
+        "SECTOR", "FIRM_SIZE", "FIRM_SIZE_CODE", "EMPLOYEE_COUNT", "FIRM_AGE_YEARS", "BUSINESS_MODEL",
+        "REGION", "SOCIAL_PLATFORM_COUNT", "SOCIAL_TEAM_SIZE", "REGULATED_SECTOR",
         "RESPONDENT_ROLE", "LEADERSHIP_SUPPORT", "HUMAN_COMPETENCIES", "TECHNOLOGY_INFRASTRUCTURE",
-        "DATA_READINESS", "MCM_TOTAL", "SMCE_TOTAL", "EFFICIENCY_MINUS_MATURITY", "MATURITY_LEVEL",
+        "DATA_READINESS", "MCM_TOTAL", *[f"MCM{i:02d}" for i in range(1, 8)],
+        "SMCE_TOTAL", *[f"SMCE{i:02d}" for i in range(1, 6)],
+        "ENABLER_TOTAL", *[f"EN{i:02d}" for i in range(1, 5)],
+        "OUTCOME_TOTAL", *[f"OUT{i:02d}" for i in range(1, 5)],
+        "EFFICIENCY_MINUS_MATURITY", "MATURITY_LEVEL",
         "MATURITY_LEVEL_ORDER",
     ]
     wide_headers = list(wide_base_headers)
@@ -191,13 +197,23 @@ def build_research_sheets(db, origin: str = "REAL") -> OrderedDict:
         assessment_row = next(row for row in assessments if row["id"] == assessment_id)
         context = contexts.get(assessment_id, {})
         summary = score_summaries.get(assessment_id, {})
+        dimensions = dimension_summaries.get(assessment_id, {})
         size = context.get("firm_size") or assessment_row["size"]
+        enabler_values = [dimensions.get(f"EN{i:02d}") for i in range(1, 5)]
+        outcome_values = [dimensions.get(f"OUT{i:02d}") for i in range(1, 5)]
+        enabler_total = round(sum(value for value in enabler_values if value is not None) / len([value for value in enabler_values if value is not None]), 2) if any(value is not None for value in enabler_values) else None
+        outcome_total = round(sum(value for value in outcome_values if value is not None) / len([value for value in outcome_values if value is not None]), 2) if any(value is not None for value in outcome_values) else None
         base = [
             assessment_id, participant, org, data_origin, version, completed_at,
             context.get("sector") or assessment_row["sector"], size, {"MICRO": 1, "SMALL": 2, "MEDIUM": 3}.get(size),
-            context.get("firm_age_years"), context.get("region") or assessment_row["region"], context.get("social_platform_count"),
+            context.get("employee_count"), context.get("firm_age_years"), context.get("business_model") or assessment_row["business_model"],
+            context.get("region") or assessment_row["region"], context.get("social_platform_count"), context.get("social_team_size"),
+            context.get("regulated"),
             context.get("respondent_role"), context.get("leadership_support"), context.get("human_competencies"),
-            context.get("technology_infrastructure"), context.get("data_readiness"), summary.get("mcm"), summary.get("smce"),
+            context.get("technology_infrastructure"), context.get("data_readiness"), summary.get("mcm"),
+            *[dimensions.get(f"MCM{i:02d}") for i in range(1, 8)], summary.get("smce"),
+            *[dimensions.get(f"SMCE{i:02d}") for i in range(1, 6)], enabler_total, *enabler_values,
+            outcome_total, *outcome_values,
             summary.get("gap"), summary.get("level"), summary.get("level_order"),
         ]
         wide_rows.append(base + [values.get(header) for header in wide_headers[len(wide_base_headers):]])
@@ -215,10 +231,11 @@ def build_research_sheets(db, origin: str = "REAL") -> OrderedDict:
         size = context.get("firm_size") or row["size"]
         profiles.append([
             row["id"], f"ORG{int(row['organization_id']):06d}", context.get("sector") or row["sector"], size,
-            {"MICRO": 1, "SMALL": 2, "MEDIUM": 3}.get(size), context.get("firm_age_years"),
-            context.get("region") or row["region"], context.get("social_platform_count"), context.get("respondent_role"),
+            {"MICRO": 1, "SMALL": 2, "MEDIUM": 3}.get(size), context.get("employee_count"), context.get("firm_age_years"),
+            context.get("business_model") or row["business_model"], context.get("region") or row["region"],
+            context.get("social_platform_count"), context.get("social_team_size"), context.get("regulated"), context.get("respondent_role"),
             context.get("leadership_support"), context.get("human_competencies"), context.get("technology_infrastructure"),
-            context.get("data_readiness"), row["business_model"], row["data_origin"],
+            context.get("data_readiness"), row["data_origin"],
         ])
     versions = sorted({row["version_id"] for row in assessments})
     if not versions:
@@ -230,39 +247,47 @@ def build_research_sheets(db, origin: str = "REAL") -> OrderedDict:
     for version_id in versions:
         for row in db.execute("SELECT i.*,v.version FROM items i JOIN instrument_versions v ON v.id=i.version_id WHERE i.version_id=? ORDER BY i.sort_order,i.id", (version_id,)):
             instrument_rows.append([row["version"], row["code"], row["construct"], row["dimension_code"], row["prompt_ar"], row["prompt_en"], row["required"], row["reverse_coded"], row["weight"], row["response_type"], row["min_value"], row["max_value"], row["lifecycle_status"], row["source"]])
-            codebook_rows.append([row["code"], row["prompt_ar"], row["prompt_en"], row["construct"], row["dimension_code"], row["response_type"], f"{row['min_value']}-{row['max_value']}", "NOT_ANSWERED|NOT_APPLICABLE|SKIPPED|TECHNICAL_MISSING", row["reverse_coded"], row["source"], row["version"]])
-        value_label_rows.extend([["LIKERT_1_5", value, ar, en] for value, ar, en in [(1, "لا أوافق بشدة", "Strongly disagree"), (2, "لا أوافق", "Disagree"), (3, "محايد", "Neutral"), (4, "أوافق", "Agree"), (5, "أوافق بشدة", "Strongly agree")]])
+            codebook_rows.append([row["code"], row["prompt_ar"], row["prompt_en"], row["construct"], row["dimension_code"], row["response_type"], f"{row['min_value']}-{row['max_value']}", "NOT_APPLICABLE|DONT_KNOW", row["reverse_coded"], row["source"], row["version"]])
+    for scale_code, labels in SCALE_DEFINITIONS.items():
+        value_label_rows.extend([[scale_code, label["value"], label["label_ar"], label["label_en"]] for label in labels])
     value_label_rows.extend([
         ["FIRM_SIZE_CODE", 1, "متناهية الصغر", "Micro"], ["FIRM_SIZE_CODE", 2, "صغيرة", "Small"], ["FIRM_SIZE_CODE", 3, "متوسطة", "Medium"],
-        ["MATURITY_LEVEL_ORDER", 1, "تفاعلي", "Reactive"], ["MATURITY_LEVEL_ORDER", 2, "مستجيب", "Responsive"],
-        ["MATURITY_LEVEL_ORDER", 3, "مُدار ومتكامل", "Managed & Integrated"], ["MATURITY_LEVEL_ORDER", 4, "استباقي ومتكيّف", "Proactive & Adaptive"],
-        ["MATURITY_LEVEL_ORDER", 5, "مؤسسي وذكي", "Institutionalised & Intelligent"],
+        *[["MATURITY_LEVEL_ORDER", level["level_order"], level["label_ar"], level["label_en"]] for level in MATURITY_LEVELS],
     ])
     metadata_labels = {
         "ASSESSMENT_ID": ("معرف التقييم", "Assessment identifier"), "PARTICIPANT_ID": ("معرف المشارك المجهول", "Anonymous participant identifier"),
         "ORG_ID": ("معرف المنشأة المجهول", "Anonymous organisation identifier"), "DATA_ORIGIN": ("مصدر البيانات", "Data origin"),
         "INSTRUMENT_VERSION": ("إصدار الأداة", "Instrument version"), "COMPLETED_AT": ("وقت الإكمال", "Completion timestamp"),
         "SECTOR": ("قطاع المنشأة", "Firm sector"), "FIRM_SIZE": ("حجم المنشأة", "Firm size"), "FIRM_SIZE_CODE": ("رمز حجم المنشأة", "Firm size code"),
-        "FIRM_AGE_YEARS": ("عمر المنشأة بالسنوات", "Firm age in years"), "REGION": ("المنطقة", "Region"),
+        "EMPLOYEE_COUNT": ("عدد الموظفين", "Employee count"), "FIRM_AGE_YEARS": ("عمر المنشأة بالسنوات", "Firm age in years"),
+        "BUSINESS_MODEL": ("نموذج الأعمال", "Business model"), "REGION": ("المنطقة", "Region"),
         "SOCIAL_PLATFORM_COUNT": ("عدد منصات التواصل المستخدمة", "Number of social media platforms"), "RESPONDENT_ROLE": ("دور المجيب", "Respondent role"),
+        "SOCIAL_TEAM_SIZE": ("حجم فريق التواصل الاجتماعي", "Social media team size"), "REGULATED_SECTOR": ("قطاع منظم رقابيًا", "Regulated sector"),
         "LEADERSHIP_SUPPORT": ("دعم القيادة", "Leadership support"), "HUMAN_COMPETENCIES": ("الكفاءات البشرية", "Human competencies"),
         "TECHNOLOGY_INFRASTRUCTURE": ("البنية التحتية التقنية", "Technology infrastructure"), "DATA_READINESS": ("جاهزية البيانات", "Data readiness"),
         "MCM_TOTAL": ("الدرجة الكلية للنضج الاتصالي التسويقي", "Marketing communication maturity total"),
         "SMCE_TOTAL": ("الدرجة الكلية للكفاءة الاتصالية", "Social media communication efficiency total"),
+        "ENABLER_TOTAL": ("المتوسط التشخيصي للممكنات التنظيمية", "Organisational enablers diagnostic mean"),
+        "OUTCOME_TOTAL": ("المتوسط التشخيصي للنتائج الاختيارية", "Optional outcomes diagnostic mean"),
         "EFFICIENCY_MINUS_MATURITY": ("فارق الكفاءة ناقص النضج", "Efficiency minus maturity gap"),
         "MATURITY_LEVEL": ("تصنيف مرحلة النضج", "Maturity stage classification"), "MATURITY_LEVEL_ORDER": ("ترتيب مرحلة النضج", "Maturity stage order"),
     }
     existing_variables = {row[0] for row in codebook_rows}
+    for construct, prefix, count in (("MCM", "MCM", 7), ("SMCE", "SMCE", 5), ("ENABLER", "EN", 4), ("OUTCOME", "OUT", 4)):
+        for index in range(1, count + 1):
+            variable = f"{prefix}{index:02d}"
+            metadata_labels.setdefault(variable, (f"درجة البعد {variable}", f"{construct} dimension score {variable}"))
     for variable, (label_ar, label_en) in metadata_labels.items():
         if variable not in existing_variables:
-            codebook_rows.insert(0, [variable, label_ar, label_en, "CONTEXT" if variable not in {"MCM_TOTAL", "SMCE_TOTAL", "EFFICIENCY_MINUS_MATURITY", "MATURITY_LEVEL", "MATURITY_LEVEL_ORDER"} else "SCORE", "", "NUMERIC_OR_STRING", "", "SYSTEM_MISSING", 0, "System-derived or participant demographics", "all"])
+            is_score = variable in {"MCM_TOTAL", "SMCE_TOTAL", "ENABLER_TOTAL", "OUTCOME_TOTAL", "EFFICIENCY_MINUS_MATURITY", "MATURITY_LEVEL", "MATURITY_LEVEL_ORDER"} or bool(re.fullmatch(r"(?:MCM|SMCE|EN|OUT)\d{2}", variable))
+            codebook_rows.insert(0, [variable, label_ar, label_en, "SCORE" if is_score else "CONTEXT", "", "NUMERIC_OR_STRING", "", "SYSTEM_MISSING", 0, "System-derived score" if is_score else "Participant demographics", "all"])
     generated = datetime.now(timezone.utc).isoformat()
     return OrderedDict([
         ("01_RESPONSES_WIDE", (wide_headers, wide_rows)),
         ("02_RESPONSES_LONG", (long_headers, long_rows)),
         ("03_MCM_SCORES", (mcm_score_headers, mcm_rows)),
         ("04_SMCE_SCORES", (smce_score_headers, smce_rows)),
-        ("05_COMPANY_PROFILE", (["ASSESSMENT_ID", "ORG_ID", "SECTOR", "FIRM_SIZE", "FIRM_SIZE_CODE", "FIRM_AGE_YEARS", "REGION", "SOCIAL_PLATFORM_COUNT", "RESPONDENT_ROLE", "LEADERSHIP_SUPPORT", "HUMAN_COMPETENCIES", "TECHNOLOGY_INFRASTRUCTURE", "DATA_READINESS", "BUSINESS_MODEL", "DATA_ORIGIN"], profiles)),
+        ("05_COMPANY_PROFILE", (["ASSESSMENT_ID", "ORG_ID", "SECTOR", "FIRM_SIZE", "FIRM_SIZE_CODE", "EMPLOYEE_COUNT", "FIRM_AGE_YEARS", "BUSINESS_MODEL", "REGION", "SOCIAL_PLATFORM_COUNT", "SOCIAL_TEAM_SIZE", "REGULATED_SECTOR", "RESPONDENT_ROLE", "LEADERSHIP_SUPPORT", "HUMAN_COMPETENCIES", "TECHNOLOGY_INFRASTRUCTURE", "DATA_READINESS", "DATA_ORIGIN"], profiles)),
         ("06_CODEBOOK", (["VARIABLE_NAME", "LABEL_AR", "LABEL_EN", "CONSTRUCT", "DIMENSION", "RESPONSE_TYPE", "VALUES", "MISSING_VALUES", "REVERSE_CODED", "SOURCE", "INSTRUMENT_VERSION"], codebook_rows)),
         ("07_VARIABLE_LABELS", (["VARIABLE_NAME", "VARIABLE_LABEL_AR", "VARIABLE_LABEL_EN"], [[row[0], row[1], row[2]] for row in codebook_rows])),
         ("08_VALUE_LABELS", (["VARIABLE_GROUP", "VALUE", "LABEL_AR", "LABEL_EN"], value_label_rows)),
@@ -290,13 +315,14 @@ def spss_package(db, origin: str = "REAL") -> bytes:
         archive.writestr("value_labels.xlsx", xlsx_bytes(OrderedDict([("VALUE_LABELS", (value_headers, value_rows))])))
         variable_names = [re.sub(r"[^A-Za-z0-9_]", "_", header.upper())[:64] for header in wide_headers]
         numeric_exact = {
-            "ASSESSMENT_ID", "COMPLETED_AT", "FIRM_SIZE_CODE", "FIRM_AGE_YEARS", "SOCIAL_PLATFORM_COUNT",
+            "ASSESSMENT_ID", "COMPLETED_AT", "FIRM_SIZE_CODE", "EMPLOYEE_COUNT", "FIRM_AGE_YEARS", "SOCIAL_PLATFORM_COUNT",
+            "SOCIAL_TEAM_SIZE", "REGULATED_SECTOR",
             "LEADERSHIP_SUPPORT", "HUMAN_COMPETENCIES", "TECHNOLOGY_INFRASTRUCTURE", "DATA_READINESS",
-            "MCM_TOTAL", "SMCE_TOTAL", "EFFICIENCY_MINUS_MATURITY", "MATURITY_LEVEL_ORDER",
+            "MCM_TOTAL", "SMCE_TOTAL", "ENABLER_TOTAL", "OUTCOME_TOTAL", "EFFICIENCY_MINUS_MATURITY", "MATURITY_LEVEL_ORDER",
         }
         numeric_variables = [
             name for header, name in zip(wide_headers, variable_names)
-            if header in numeric_exact or bool(re.fullmatch(r"(?:MCM|SMCE|ENA|OUT)\d{2}_\d{2}", header))
+            if header in numeric_exact or bool(re.fullmatch(r"(?:MCM|SMCE|EN|OUT)\d{2}(?:_\d{2})?", header))
         ]
         definitions = []
         for header, name in zip(wide_headers, variable_names):
@@ -306,15 +332,20 @@ def spss_package(db, origin: str = "REAL") -> bytes:
         for header, name in zip(wide_headers, variable_names):
             label = label_lookup.get(header, header).replace("'", "''")[:240]
             label_lines.append(f" {name} '{label}'")
-        likert_variables = [name for name in numeric_variables if re.fullmatch(r"(?:MCM|SMCE|ENA|OUT)\d{2}_\d{2}", name)]
-        likert_variables.extend([name for name in ("LEADERSHIP_SUPPORT", "HUMAN_COMPETENCIES", "TECHNOLOGY_INFRASTRUCTURE", "DATA_READINESS") if name in variable_names])
+        item_variables = [name for name in numeric_variables if re.fullmatch(r"(?:MCM|SMCE|EN|OUT)\d{2}_\d{2}", name)]
+        relative_variables = [name for name in item_variables if name.startswith("OUT04_")]
+        extent_variables = [name for name in item_variables if name not in relative_variables]
         value_label_syntax = ""
-        if likert_variables:
-            value_label_syntax += f"VALUE LABELS {' '.join(likert_variables)} 1 'Strongly disagree' 2 'Disagree' 3 'Neutral' 4 'Agree' 5 'Strongly agree'.\n"
+        if extent_variables:
+            value_label_syntax += f"VALUE LABELS {' '.join(extent_variables)} 1 'Does not apply at all' 2 'Applies to a small extent' 3 'Applies to a moderate extent' 4 'Applies to a great extent' 5 'Applies to a very great extent'.\n"
+        if relative_variables:
+            value_label_syntax += f"VALUE LABELS {' '.join(relative_variables)} 1 'Much worse than major competitors' 2 'Worse than major competitors' 3 'Similar to major competitors' 4 'Better than major competitors' 5 'Much better than major competitors'.\n"
         if "FIRM_SIZE_CODE" in variable_names:
             value_label_syntax += "VALUE LABELS FIRM_SIZE_CODE 1 'Micro' 2 'Small' 3 'Medium'.\n"
         if "MATURITY_LEVEL_ORDER" in variable_names:
             value_label_syntax += "VALUE LABELS MATURITY_LEVEL_ORDER 1 'Reactive' 2 'Responsive' 3 'Managed and Integrated' 4 'Proactive and Adaptive' 5 'Institutionalised and Intelligent'.\n"
+        if "REGULATED_SECTOR" in variable_names:
+            value_label_syntax += "VALUE LABELS REGULATED_SECTOR 0 'No' 1 'Yes'.\n"
         labels_block = "\n".join(label_lines)
         syntax = (
             "* Marketing Communication Maturity Scale - SPSS import package.\n"

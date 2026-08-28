@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from . import config
+from .ai_plans import generate_improvement_plan
 from .database import assessment_research_eligible, audit, connect, get_config, init_db, now, password_hash, token_hash, verify_password
 from .exports import assessment_pdf, build_research_sheets, csv_bytes, fingerprint, research_workbook, spss_package
 from .instruments import InstrumentImportError, parse_docx_base64, validate_tables
@@ -29,7 +30,7 @@ from .scoring import (
 
 
 PUBLIC_FILES = {"index.html", "app.js", "styles.css", "import.css", "platform.css", "og.png", "og-mcm-v2.png", "favicon.svg"}
-ALLOWED_MISSING = {"NOT_ANSWERED", "NOT_APPLICABLE", "SKIPPED", "TECHNICAL_MISSING"}
+ALLOWED_MISSING = {"NOT_APPLICABLE", "DONT_KNOW"}
 ROADMAP_STATUSES = {"NOT_STARTED", "IN_PROGRESS", "COMPLETED", "DEFERRED"}
 PRIVILEGED_ASSESSMENT_ROLES = {"COMPANY_ADMIN", "CONSULTANT", "SUPER_ADMIN"}
 RESEARCH_ROLES = {"RESEARCHER", "SUPER_ADMIN"}
@@ -75,7 +76,11 @@ def data_version(tables: dict) -> str | None:
     metadata = tables.get("INSTRUMENT_METADATA") or []
     if not metadata:
         return None
-    return metadata[0].get("instrument_version") or metadata[0].get("version")
+    first = metadata[0]
+    if "key" in first and "value" in first:
+        flattened = {str(row.get("key") or "").strip(): row.get("value") for row in metadata}
+        return flattened.get("instrument_version") or flattened.get("version")
+    return first.get("instrument_version") or first.get("version")
 
 
 class API(BaseHTTPRequestHandler):
@@ -283,6 +288,12 @@ class API(BaseHTTPRequestHandler):
                 "platform_name": "مقياس النضج الاتصالي التسويقي",
                 "storage": "ephemeral-demo" if config.EPHEMERAL_STORAGE else "persistent-configured",
                 "notice": "بيئة عرض مؤقتة؛ لا تستخدم بيانات حقيقية." if config.EPHEMERAL_STORAGE else None,
+                "ai_improvement_plans": {
+                    "available": config.AI_AVAILABLE,
+                    "provider": config.AI_PROVIDER if config.AI_AVAILABLE else "off",
+                    "deterministic_fallback": True,
+                    "notice": "التحسين الذكي اختياري ولا يغيّر الدرجة أو مرحلة النضج.",
+                },
             })
         if method == "POST" and path == "/api/public/assessments":
             return self._public_assessment(data)
@@ -327,6 +338,7 @@ class API(BaseHTTPRequestHandler):
         firm_size = str(data.get("firm_size") or "").strip().upper()
         region = str(data.get("region") or "").strip()
         respondent_role = str(data.get("respondent_role") or "").strip()
+        business_model = str(data.get("business_model") or "").strip().upper()
         if not bool(data.get("service_consent")):
             raise APIError("service_consent_required", 422)
         if not 2 <= len(organization_name) <= 120:
@@ -339,31 +351,31 @@ class API(BaseHTTPRequestHandler):
             raise APIError("region_required", 422)
         if not 2 <= len(respondent_role) <= 100:
             raise APIError("respondent_role_required", 422)
+        if business_model not in {"B2B", "B2C", "B2B2C", "GOVERNMENT", "NONPROFIT", "OTHER"}:
+            raise APIError("business_model_required", 422)
         try:
             firm_age_years = int(data.get("firm_age_years"))
+            employee_count = int(data.get("employee_count"))
             social_platform_count = int(data.get("social_platform_count"))
+            social_team_size = int(data.get("social_team_size"))
         except (TypeError, ValueError) as exc:
             raise APIError("invalid_demographics", 422) from exc
-        if not 0 <= firm_age_years <= 200 or not 0 <= social_platform_count <= 50:
+        if (
+            not 0 <= firm_age_years <= 200
+            or not 1 <= employee_count <= 250_000
+            or not 0 <= social_platform_count <= 50
+            or not 0 <= social_team_size <= employee_count
+        ):
             raise APIError("invalid_demographics", 422)
-        enablers = data.get("enablers")
-        if not isinstance(enablers, dict):
-            raise APIError("enablers_required", 422)
-        enabler_keys = {
-            "leadership_support": "ENA01",
-            "human_competencies": "ENA02",
-            "technology_infrastructure": "ENA03",
-            "data_readiness": "ENA04",
-        }
-        parsed_enablers = {}
-        for key in enabler_keys:
-            try:
-                value = float(enablers.get(key))
-            except (TypeError, ValueError) as exc:
-                raise APIError("invalid_enabler_rating", 422, {"field": key}) from exc
-            if value not in {1.0, 2.0, 3.0, 4.0, 5.0}:
-                raise APIError("invalid_enabler_rating", 422, {"field": key})
-            parsed_enablers[key] = value
+        regulated_raw = data.get("regulated_sector")
+        if isinstance(regulated_raw, bool):
+            regulated_sector = int(regulated_raw)
+        elif str(regulated_raw).strip().upper() in {"1", "YES", "TRUE"}:
+            regulated_sector = 1
+        elif str(regulated_raw).strip().upper() in {"0", "NO", "FALSE"}:
+            regulated_sector = 0
+        else:
+            raise APIError("regulated_sector_required", 422)
 
         db = connect()
         try:
@@ -394,12 +406,13 @@ class API(BaseHTTPRequestHandler):
             ).lastrowid
             db.execute(
                 """INSERT INTO assessment_context(
-                     assessment_id,sector,firm_size,firm_age_years,region,social_platform_count,respondent_role,
+                     assessment_id,sector,firm_size,employee_count,firm_age_years,business_model,region,
+                     social_platform_count,social_team_size,regulated,respondent_role,
                      leadership_support,human_competencies,technology_infrastructure,data_readiness,created_at
-                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (assessment_id, sector, firm_size, firm_age_years, region, social_platform_count, respondent_role,
-                 parsed_enablers["leadership_support"], parsed_enablers["human_competencies"],
-                 parsed_enablers["technology_infrastructure"], parsed_enablers["data_readiness"], timestamp),
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (assessment_id, sector, firm_size, employee_count, firm_age_years, business_model, region,
+                 social_platform_count, social_team_size, regulated_sector, respondent_role,
+                 None, None, None, None, timestamp),
             )
             participant_id = db.execute(
                 "INSERT INTO participants(organization_id,full_name,email,job_title,created_at) VALUES (?,?,?,?,?)",
@@ -418,17 +431,6 @@ class API(BaseHTTPRequestHandler):
                     "INSERT INTO consents(participant_id,consent_type,consent_version,accepted,accepted_at) VALUES (?,?,?,?,?)",
                     (participant_id, consent_type, "1.0", accepted, timestamp),
                 )
-            for key, dimension_code in enabler_keys.items():
-                item = db.execute(
-                    "SELECT id FROM items WHERE version_id=? AND dimension_code=? ORDER BY sort_order,id LIMIT 1",
-                    (version["id"], dimension_code),
-                ).fetchone()
-                if item:
-                    db.execute(
-                        """INSERT INTO responses(assessment_id,participant_id,item_id,numeric_value,created_at,updated_at)
-                           VALUES (?,?,?,?,?,?)""",
-                        (assessment_id, participant_id, item["id"], parsed_enablers[key], timestamp, timestamp),
-                    )
             session_raw = secrets.token_urlsafe(36)
             db.execute(
                 "INSERT INTO participant_sessions(token,participant_id,name,email,assessment_id,expires_at) VALUES (?,?,?,?,?,?)",
@@ -916,7 +918,10 @@ class API(BaseHTTPRequestHandler):
             instrument_id = db.execute("INSERT INTO instruments(code,name,status,created_at) VALUES ('MCM_CORE','MCM / SMCE Scientific Instrument','ACTIVE',?)", (now(),)).lastrowid
         else:
             instrument_id = instrument["id"]
-        metadata = (tables.get("INSTRUMENT_METADATA") or [{}])[0]
+        metadata_rows = tables.get("INSTRUMENT_METADATA") or [{}]
+        metadata = metadata_rows[0]
+        if "key" in metadata and "value" in metadata:
+            metadata = {str(row.get("key") or "").strip(): row.get("value") for row in metadata_rows}
         requested_version = str(metadata.get("version") or data_version(tables) or "").strip()
         if requested_version and re.fullmatch(r"\d+\.\d+\.\d+", requested_version) and not db.execute("SELECT 1 FROM instrument_versions WHERE instrument_id=? AND version=?", (instrument_id, requested_version)).fetchone():
             version = requested_version
@@ -926,26 +931,81 @@ class API(BaseHTTPRequestHandler):
             while len(parts) < 3:
                 parts.append(0)
             version = f"{parts[0]}.{parts[1] + 1}.0"
-        version_id = db.execute("INSERT INTO instrument_versions(instrument_id,version,status,notes,created_by,created_at) VALUES (?,?,?,?,?,?)", (instrument_id, version, "DRAFT", "Imported scientific instrument; publication remains provisional until validation.", context["id"], now())).lastrowid
+        import_metadata = dict(metadata)
+        import_metadata["source_instrument_version"] = requested_version or None
+        import_metadata["platform_version"] = version
+        version_id = db.execute(
+            "INSERT INTO instrument_versions(instrument_id,version,status,notes,metadata_json,created_by,created_at) VALUES (?,?,?,?,?,?,?)",
+            (instrument_id, version, "DRAFT", f"Imported from scientific instrument v{requested_version or 'unknown'}; expert review and quantitative validation remain required.", json.dumps(import_metadata, ensure_ascii=False, sort_keys=True), context["id"], now()),
+        ).lastrowid
         settings = {row.get("item_code") or row.get("code"): row for row in tables.get("ITEM_SETTINGS", [])}
-        dimension_sort = 0
-        for row in tables.get("DIMENSIONS", []):
-            dimension_sort += 1
+        for dimension_sort, row in enumerate(tables.get("DIMENSIONS", []), 1):
             code = row.get("dimension_code") or row.get("code")
-            construct = str(row.get("construct") or row.get("measure") or "MCM").upper()
-            db.execute("INSERT OR IGNORE INTO dimensions(version_id,code,construct,name,name_en,weight,sort_order) VALUES (?,?,?,?,?,?,?)", (version_id, code, construct, row.get("name_ar") or row.get("name") or code, row.get("name_en"), float(row.get("weight") or 1), dimension_sort))
-        item_sort = 0
-        for row in tables.get("ITEMS", []):
-            item_sort += 1
+            construct = str(row.get("construct") or row.get("construct_type") or row.get("measure") or "MCM").upper()
+            if construct == "OPTIONAL_OUTCOME":
+                construct = "OUTCOME"
+            db.execute(
+                """INSERT OR IGNORE INTO dimensions(
+                     version_id,code,construct,name,name_en,weight,source_type,source_reference,sort_order
+                   ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                (version_id, code, construct, row.get("name_ar") or row.get("name") or code, row.get("name_en"), float(row.get("weight") or 1), row.get("source_type"), row.get("source_reference"), int(row.get("display_order") or row.get("sort_order") or dimension_sort)),
+            )
+
+        scale_ranges = {}
+        for row in tables.get("SCALE_VALUES", []):
+            code = str(row.get("scale_code") or row.get("scale") or "").strip()
+            try:
+                value = float(row.get("value"))
+            except (TypeError, ValueError):
+                continue
+            scale_ranges.setdefault(code, []).append((value, row))
+        for scale_code, scale_rows in scale_ranges.items():
+            values = [entry[0] for entry in scale_rows]
+            response_type = {"LIKERT_5_EXTENT": "LIKERT_EXTENT", "RELATIVE_5_COMPETITOR": "LIKERT_RELATIVE"}.get(scale_code, "LIKERT")
+            scale_id = db.execute(
+                "INSERT INTO scales(version_id,code,response_type,min_value,max_value) VALUES (?,?,?,?,?)",
+                (version_id, scale_code, response_type, min(values), max(values)),
+            ).lastrowid
+            for value, row in scale_rows:
+                db.execute(
+                    "INSERT INTO scale_values(scale_id,value,label_ar,label_en) VALUES (?,?,?,?)",
+                    (scale_id, value, row.get("label_ar"), row.get("label_en")),
+                )
+            for missing_type, label_ar, label_en in (("NOT_APPLICABLE", "لا ينطبق", "Not applicable"), ("DONT_KNOW", "لا أعرف", "Don't know")):
+                db.execute(
+                    "INSERT INTO scale_values(scale_id,value,label_ar,label_en,missing_type) VALUES (?,NULL,?,?,?)",
+                    (scale_id, label_ar, label_en, missing_type),
+                )
+
+        for profile_sort, row in enumerate(tables.get("PROFILE_FIELDS", []), 1):
+            db.execute(
+                """INSERT INTO instrument_profile_fields(
+                     version_id,code,construct,label_ar,label_en,response_type,include_in_score,source_reference,sort_order
+                   ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                (version_id, row.get("code") or row.get("field_code"), row.get("construct") or row.get("construct_type") or "CONTEXT", row.get("label_ar") or row.get("arabic_label"), row.get("label_en") or row.get("english_label"), row.get("response_type") or "TEXT", int(str(row.get("include_in_score") or "NO").upper() in {"1", "TRUE", "YES"}), row.get("source_reference"), profile_sort),
+            )
+
+        for item_sort, row in enumerate(tables.get("ITEMS", []), 1):
             code = row.get("item_code") or row.get("code")
             setting = settings.get(code, {})
-            construct = str(row.get("construct") or row.get("measure") or "MCM").upper()
+            construct = str(row.get("construct") or row.get("construct_type") or row.get("measure") or "MCM").upper()
+            if construct == "OPTIONAL_OUTCOME":
+                construct = "OUTCOME"
             reverse = str(setting.get("reverse_coded", "false")).lower() in {"1", "true", "yes"}
             required = str(setting.get("required", "true")).lower() not in {"0", "false", "no"}
+            scale_code = setting.get("scale_code") or row.get("scale_code")
+            response_type = setting.get("response_type") or row.get("response_type") or {"LIKERT_5_EXTENT": "LIKERT_EXTENT", "RELATIVE_5_COMPETITOR": "LIKERT_RELATIVE"}.get(scale_code, "LIKERT")
+            values = [entry[0] for entry in scale_ranges.get(scale_code, [])]
+            source_type = setting.get("source_type") or row.get("source_type")
+            source_reference = setting.get("source_reference") or row.get("source_reference")
+            source = row.get("source") or ":".join(filter(None, (source_type, source_reference))) or None
             db.execute(
-                """INSERT INTO items(version_id,code,construct,dimension_code,prompt_ar,prompt_en,source,lifecycle_status,reverse_coded,required,weight,response_type,min_value,max_value,sort_order)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (version_id, code, construct, row.get("dimension_code") or row.get("dimension"), row.get("prompt_ar") or row.get("wording_ar") or row.get("prompt"), row.get("prompt_en") or row.get("wording_en"), row.get("source"), row.get("lifecycle_status") or "PILOT", int(reverse), int(required), float(setting.get("weight") or 1), setting.get("response_type") or "LIKERT", float(setting.get("min_value") or 1), float(setting.get("max_value") or 5), item_sort),
+                """INSERT INTO items(
+                     version_id,code,construct,dimension_code,prompt_ar,prompt_en,source,lifecycle_status,
+                     reverse_coded,required,weight,response_type,scale_code,include_in_score,score_group,
+                     source_type,source_reference,min_value,max_value,sort_order
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (version_id, code, construct, row.get("dimension_code") or row.get("dimension"), row.get("prompt_ar") or row.get("arabic_item") or row.get("wording_ar") or row.get("prompt"), row.get("prompt_en") or row.get("english_item") or row.get("wording_en"), source, setting.get("item_status") or row.get("lifecycle_status") or "EXPERT_REVIEW", int(reverse), int(required), float(setting.get("weight") or 1), response_type, scale_code, int(str(setting.get("include_in_score") or "YES").upper() in {"1", "TRUE", "YES"}), setting.get("score_group"), source_type, source_reference, float(setting.get("min_value") or (min(values) if values else 1)), float(setting.get("max_value") or (max(values) if values else 5)), int(row.get("display_order") or row.get("sort_order") or item_sort)),
             )
         for index, row in enumerate(tables.get("MATURITY_LEVELS", []), 1):
             try:
@@ -953,7 +1013,28 @@ class API(BaseHTTPRequestHandler):
                 maximum = float(row.get("max_score") or row.get("max"))
             except (TypeError, ValueError) as exc:
                 raise APIError("invalid_maturity_threshold", 422, {"row": index}) from exc
-            db.execute("INSERT INTO maturity_levels(version_id,code,label_ar,label_en,min_score,max_score,level_order) VALUES (?,?,?,?,?,?,?)", (version_id, row.get("code") or f"LEVEL_{index}", row.get("label_ar") or row.get("name_ar") or f"المستوى {index}", row.get("label_en") or row.get("name_en") or f"Level {index}", minimum, maximum, int(row.get("level_order") or index)))
+            db.execute(
+                """INSERT INTO maturity_levels(
+                     version_id,code,label_ar,label_en,min_score,max_score,threshold_status,source_reference,level_order
+                   ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                (version_id, row.get("code") or row.get("level_code") or f"LEVEL_{index}", row.get("label_ar") or row.get("name_ar") or f"المستوى {index}", row.get("label_en") or row.get("name_en") or f"Level {index}", minimum, maximum, row.get("threshold_status") or "PROVISIONAL_LABEL_ONLY", row.get("source_reference"), int(row.get("level_order") or row.get("level_number") or index)),
+            )
+        dimension_codes = {row[0] for row in db.execute("SELECT code FROM dimensions WHERE version_id=?", (version_id,))}
+        for rule_code, name_ar, dimensions, operator, threshold, severity, confidence in config.DIAGNOSTIC_RULES:
+            if all(code in dimension_codes for code in dimensions.split(":")):
+                db.execute(
+                    "INSERT INTO diagnostic_rules(version_id,code,name_ar,dimensions,operator,threshold,severity,confidence) VALUES (?,?,?,?,?,?,?,?)",
+                    (version_id, rule_code, name_ar, dimensions, operator, threshold, severity, confidence),
+                )
+        for dimension_code, (problem, action, owner, kpi) in config.RECOMMENDATIONS.items():
+            if dimension_code in dimension_codes:
+                db.execute(
+                    """INSERT INTO recommendations(
+                         version_id,dimension_code,problem,action,why_it_matters,implementation_guidance,
+                         suggested_owner,expected_impact,effort,time_horizon,kpi,evidence_source
+                       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (version_id, dimension_code, problem, action, "إغلاق الفجوة يدعم اتساق القرار والتنفيذ.", action, owner, "HIGH", "MEDIUM", "31-90", kpi, "MCM scientific instrument v0.2 improvement library"),
+                )
         return version_id, version
 
     def _participant_for_user(self, db, context) -> int:
@@ -1008,6 +1089,13 @@ class API(BaseHTTPRequestHandler):
             missing = answer.get("missing_type")
             if missing is not None:
                 missing = str(missing).upper()
+                if missing == "NOT_ANSWERED":
+                    db.execute(
+                        "DELETE FROM responses WHERE assessment_id=? AND participant_id=? AND item_id=?",
+                        (assessment["id"], participant_id, item_id),
+                    )
+                    saved += 1
+                    continue
                 if missing not in ALLOWED_MISSING:
                     raise APIError("invalid_missing_type", 422, {"item_id": item_id})
             numeric_value = None
@@ -1084,6 +1172,39 @@ class API(BaseHTTPRequestHandler):
     def _assessments(self, method: str, path: str, data: dict, context):
         db = connect()
         try:
+            ai_plan_match = re.fullmatch(r"/api/assessments/(\d+)/ai-plan", path)
+            if ai_plan_match and method == "POST":
+                self.require_roles(context, PRIVILEGED_ASSESSMENT_ROLES)
+                assessment_id = int(ai_plan_match.group(1))
+                assessment = self._assessment(db, assessment_id, context)
+                if assessment["status"] != "COMPLETED":
+                    raise APIError("assessment_not_completed", 409)
+                self._rate_limit(f"ai_plan:{context['id']}", 10, 3600)
+                result = score_payload(db, assessment_id)
+                plan = generate_improvement_plan(
+                    result,
+                    provider=config.AI_PROVIDER,
+                    model=config.AI_MODEL,
+                    base_url=config.AI_BASE_URL,
+                    timeout=config.AI_TIMEOUT,
+                )
+                generation = plan.get("generation") or {}
+                audit(
+                    db,
+                    context["id"],
+                    "ai_improvement_plan",
+                    "assessment",
+                    assessment_id,
+                    {
+                        "provider": generation.get("provider"),
+                        "mode": generation.get("mode"),
+                        "status": generation.get("status"),
+                        "reason_code": generation.get("reason_code"),
+                        "aggregate_only": True,
+                    },
+                )
+                db.commit()
+                return self.send_json({"assessment_id": assessment_id, "plan": plan})
             if path == "/api/assessments" and method == "GET":
                 restricted = context["role"] not in PRIVILEGED_ASSESSMENT_ROLES
                 scope = " AND EXISTS (SELECT 1 FROM assessment_participants ap JOIN participants p ON p.id=ap.participant_id WHERE ap.assessment_id=a.id AND p.user_id=?)" if restricted else ""
@@ -1396,7 +1517,7 @@ class API(BaseHTTPRequestHandler):
                 sheets = build_research_sheets(db, origin)
                 mcm_headers, mcm_rows = sheets["03_MCM_SCORES"]
                 smce_headers, smce_rows = sheets["04_SMCE_SCORES"]
-                mcm_idx, smce_idx = mcm_headers.index("TOTAL"), smce_headers.index("TOTAL")
+                mcm_idx, smce_idx = mcm_headers.index("MCM_TOTAL"), smce_headers.index("SMCE_TOTAL")
                 mcm = [float(row[mcm_idx]) for row in mcm_rows if row[mcm_idx] is not None]
                 smce = [float(row[smce_idx]) for row in smce_rows if row[smce_idx] is not None]
 

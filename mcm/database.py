@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS instrument_versions (
   version TEXT NOT NULL,
   status TEXT NOT NULL,
   notes TEXT,
+  metadata_json TEXT NOT NULL DEFAULT '{}',
   created_by INTEGER,
   created_at INTEGER NOT NULL DEFAULT 0,
   published_at INTEGER,
@@ -188,6 +189,8 @@ CREATE TABLE IF NOT EXISTS dimensions (
   name TEXT NOT NULL,
   name_en TEXT,
   weight REAL NOT NULL DEFAULT 1,
+  source_type TEXT,
+  source_reference TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
   UNIQUE(version_id, code),
   FOREIGN KEY(version_id) REFERENCES instrument_versions(id)
@@ -225,6 +228,11 @@ CREATE TABLE IF NOT EXISTS items (
   required INTEGER NOT NULL DEFAULT 1,
   weight REAL NOT NULL DEFAULT 1,
   response_type TEXT NOT NULL DEFAULT 'LIKERT',
+  scale_code TEXT,
+  include_in_score INTEGER NOT NULL DEFAULT 1,
+  score_group TEXT,
+  source_type TEXT,
+  source_reference TEXT,
   min_value REAL DEFAULT 1,
   max_value REAL DEFAULT 5,
   sort_order INTEGER NOT NULL DEFAULT 0,
@@ -239,6 +247,8 @@ CREATE TABLE IF NOT EXISTS maturity_levels (
   label_en TEXT NOT NULL,
   min_score REAL NOT NULL,
   max_score REAL NOT NULL,
+  threshold_status TEXT NOT NULL DEFAULT 'PROVISIONAL_LABEL_ONLY',
+  source_reference TEXT,
   level_order INTEGER NOT NULL,
   UNIQUE(version_id, code),
   FOREIGN KEY(version_id) REFERENCES instrument_versions(id)
@@ -264,16 +274,34 @@ CREATE TABLE IF NOT EXISTS assessment_context (
   assessment_id INTEGER PRIMARY KEY,
   sector TEXT NOT NULL,
   firm_size TEXT NOT NULL,
+  employee_count INTEGER,
   firm_age_years INTEGER NOT NULL,
+  business_model TEXT,
   region TEXT NOT NULL,
   social_platform_count INTEGER NOT NULL,
+  social_team_size INTEGER,
+  regulated INTEGER,
   respondent_role TEXT NOT NULL,
-  leadership_support REAL NOT NULL,
-  human_competencies REAL NOT NULL,
-  technology_infrastructure REAL NOT NULL,
-  data_readiness REAL NOT NULL,
+  leadership_support REAL,
+  human_competencies REAL,
+  technology_infrastructure REAL,
+  data_readiness REAL,
   created_at INTEGER NOT NULL,
   FOREIGN KEY(assessment_id) REFERENCES assessments(id)
+);
+CREATE TABLE IF NOT EXISTS instrument_profile_fields (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  version_id INTEGER NOT NULL,
+  code TEXT NOT NULL,
+  construct TEXT NOT NULL DEFAULT 'CONTEXT',
+  label_ar TEXT NOT NULL,
+  label_en TEXT,
+  response_type TEXT NOT NULL,
+  include_in_score INTEGER NOT NULL DEFAULT 0,
+  source_reference TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(version_id, code),
+  FOREIGN KEY(version_id) REFERENCES instrument_versions(id)
 );
 CREATE TABLE IF NOT EXISTS participants (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -578,7 +606,120 @@ CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity, entity_id, cre
 """
 
 
+def _migrate_assessment_context(db: sqlite3.Connection) -> None:
+    """Expand the context snapshot and make legacy aggregate enablers nullable.
+
+    SQLite cannot remove a NOT NULL constraint with ALTER TABLE. Rebuilding this
+    small child table is therefore required so the v0.4 questionnaire can store
+    the twelve scientific enabler items without manufacturing four aggregate
+    values at assessment creation time.
+    """
+    table_info = db.execute("PRAGMA table_info(assessment_context)").fetchall()
+    if not table_info:
+        return
+    existing = {row["name"]: row for row in table_info}
+    desired_columns = (
+        "assessment_id", "sector", "firm_size", "employee_count", "firm_age_years",
+        "business_model", "region", "social_platform_count", "social_team_size",
+        "regulated", "respondent_role", "leadership_support", "human_competencies",
+        "technology_infrastructure", "data_readiness", "created_at",
+    )
+    legacy_enablers = (
+        "leadership_support", "human_competencies",
+        "technology_infrastructure", "data_readiness",
+    )
+    requires_rebuild = any(column not in existing for column in desired_columns) or any(
+        bool(existing[column]["notnull"])
+        for column in legacy_enablers
+        if column in existing
+    )
+    if not requires_rebuild:
+        return
+
+    db.execute("DROP TABLE IF EXISTS assessment_context_migration_v3")
+    db.execute(
+        """CREATE TABLE assessment_context_migration_v3 (
+             assessment_id INTEGER PRIMARY KEY,
+             sector TEXT NOT NULL,
+             firm_size TEXT NOT NULL,
+             employee_count INTEGER,
+             firm_age_years INTEGER NOT NULL,
+             business_model TEXT,
+             region TEXT NOT NULL,
+             social_platform_count INTEGER NOT NULL,
+             social_team_size INTEGER,
+             regulated INTEGER,
+             respondent_role TEXT NOT NULL,
+             leadership_support REAL,
+             human_competencies REAL,
+             technology_infrastructure REAL,
+             data_readiness REAL,
+             created_at INTEGER NOT NULL,
+             FOREIGN KEY(assessment_id) REFERENCES assessments(id)
+           )"""
+    )
+    copied_columns = [column for column in desired_columns if column in existing]
+    column_sql = ",".join(copied_columns)
+    db.execute(
+        f"INSERT INTO assessment_context_migration_v3({column_sql}) "
+        f"SELECT {column_sql} FROM assessment_context"
+    )
+    db.execute("DROP TABLE assessment_context")
+    db.execute("ALTER TABLE assessment_context_migration_v3 RENAME TO assessment_context")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_assessment_context_demographics "
+        "ON assessment_context(sector, firm_size, region)"
+    )
+
+
+def _migrate_dimension_version_constraint(db: sqlite3.Connection) -> None:
+    """Replace the legacy global dimension-code constraint with a versioned one."""
+    columns = _columns(db, "dimensions")
+    if not columns:
+        return
+    unique_indexes = db.execute("PRAGMA index_list(dimensions)").fetchall()
+    has_global_code_constraint = False
+    for index in unique_indexes:
+        if not index["unique"]:
+            continue
+        indexed = [row["name"] for row in db.execute(f"PRAGMA index_info('{index['name']}')")]
+        if indexed == ["code"]:
+            has_global_code_constraint = True
+            break
+    if not has_global_code_constraint:
+        return
+    if db.execute("SELECT COUNT(*) FROM dimensions WHERE version_id IS NULL").fetchone()[0]:
+        db.execute("UPDATE dimensions SET version_id=1 WHERE version_id IS NULL")
+    db.execute("DROP TABLE IF EXISTS dimensions_migration_v3")
+    db.execute(
+        """CREATE TABLE dimensions_migration_v3 (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             version_id INTEGER NOT NULL,
+             code TEXT NOT NULL,
+             construct TEXT NOT NULL,
+             name TEXT NOT NULL,
+             name_en TEXT,
+             weight REAL NOT NULL DEFAULT 1,
+             source_type TEXT,
+             source_reference TEXT,
+             sort_order INTEGER NOT NULL DEFAULT 0,
+             UNIQUE(version_id, code),
+             FOREIGN KEY(version_id) REFERENCES instrument_versions(id)
+           )"""
+    )
+    db.execute(
+        """INSERT INTO dimensions_migration_v3(
+             id,version_id,code,construct,name,name_en,weight,source_type,source_reference,sort_order
+           )
+           SELECT id,version_id,code,construct,name,name_en,weight,source_type,source_reference,sort_order
+           FROM dimensions"""
+    )
+    db.execute("DROP TABLE dimensions")
+    db.execute("ALTER TABLE dimensions_migration_v3 RENAME TO dimensions")
+
+
 def _migrate_legacy(db: sqlite3.Connection) -> None:
+    _migrate_assessment_context(db)
     additions = {
         "organizations": {
             "sector": "TEXT", "subsector": "TEXT", "size": "TEXT", "country": "TEXT",
@@ -591,13 +732,24 @@ def _migrate_legacy(db: sqlite3.Connection) -> None:
         "memberships": {"status": "TEXT NOT NULL DEFAULT 'ACTIVE'"},
         "sessions": {"active_org_id": "INTEGER", "created_at": "INTEGER NOT NULL DEFAULT 0", "last_seen_at": "INTEGER NOT NULL DEFAULT 0"},
         "instruments": {"code": "TEXT", "status": "TEXT NOT NULL DEFAULT 'ACTIVE'", "created_at": "INTEGER NOT NULL DEFAULT 0"},
-        "instrument_versions": {"notes": "TEXT", "created_by": "INTEGER", "created_at": "INTEGER NOT NULL DEFAULT 0", "published_at": "INTEGER", "archived_at": "INTEGER"},
-        "dimensions": {"version_id": "INTEGER", "name_en": "TEXT", "weight": "REAL NOT NULL DEFAULT 1", "sort_order": "INTEGER NOT NULL DEFAULT 0"},
+        "instrument_versions": {
+            "notes": "TEXT", "metadata_json": "TEXT NOT NULL DEFAULT '{}'", "created_by": "INTEGER",
+            "created_at": "INTEGER NOT NULL DEFAULT 0", "published_at": "INTEGER", "archived_at": "INTEGER",
+        },
+        "dimensions": {
+            "version_id": "INTEGER", "name_en": "TEXT", "weight": "REAL NOT NULL DEFAULT 1",
+            "source_type": "TEXT", "source_reference": "TEXT", "sort_order": "INTEGER NOT NULL DEFAULT 0",
+        },
         "items": {
             "prompt_en": "TEXT", "source": "TEXT", "lifecycle_status": "TEXT NOT NULL DEFAULT 'PILOT'",
             "reverse_coded": "INTEGER NOT NULL DEFAULT 0", "required": "INTEGER NOT NULL DEFAULT 1",
             "weight": "REAL NOT NULL DEFAULT 1", "response_type": "TEXT NOT NULL DEFAULT 'LIKERT'",
+            "scale_code": "TEXT", "include_in_score": "INTEGER NOT NULL DEFAULT 1", "score_group": "TEXT",
+            "source_type": "TEXT", "source_reference": "TEXT",
             "min_value": "REAL DEFAULT 1", "max_value": "REAL DEFAULT 5", "sort_order": "INTEGER NOT NULL DEFAULT 0",
+        },
+        "maturity_levels": {
+            "threshold_status": "TEXT NOT NULL DEFAULT 'PROVISIONAL_LABEL_ONLY'", "source_reference": "TEXT",
         },
         "assessments": {
             "assessment_type": "TEXT NOT NULL DEFAULT 'FULL'", "data_origin": "TEXT NOT NULL DEFAULT 'REAL'",
@@ -616,6 +768,7 @@ def _migrate_legacy(db: sqlite3.Connection) -> None:
             _ensure_columns(db, table, definitions)
     db.execute("UPDATE memberships SET role=CASE lower(role) WHEN 'admin' THEN 'COMPANY_ADMIN' WHEN 'assessor' THEN 'CONSULTANT' WHEN 'respondent' THEN 'COMPANY_RESPONDENT' ELSE upper(role) END")
     db.execute("UPDATE dimensions SET version_id=COALESCE(version_id, 1)")
+    _migrate_dimension_version_constraint(db)
 
 
 def audit(db: sqlite3.Connection, user_id: int | None, action: str, entity: str, entity_id: int | None = None, metadata: dict | None = None) -> None:
@@ -627,45 +780,150 @@ def audit(db: sqlite3.Connection, user_id: int | None, action: str, entity: str,
 
 def _seed_version(db: sqlite3.Connection, instrument_id: int, version: str) -> int:
     timestamp = now()
+    metadata = dict(config.INSTRUMENT_METADATA)
+    metadata["source_instrument_version"] = metadata.get("version")
+    metadata["platform_version"] = version
     cur = db.execute(
-        "INSERT INTO instrument_versions(instrument_id,version,status,notes,created_at,published_at) VALUES (?,?,?,?,?,?)",
-        (instrument_id, version, "PILOT", "Research Beta - provisional instrument", timestamp, timestamp),
+        """INSERT INTO instrument_versions(
+             instrument_id,version,status,notes,metadata_json,created_at,published_at
+           ) VALUES (?,?,?,?,?,?,?)""",
+        (
+            instrument_id,
+            version,
+            "PILOT",
+            "Platform v0.4 seeded from scientific instrument v0.2; expert-review and provisionally unvalidated.",
+            json.dumps(metadata, ensure_ascii=False, sort_keys=True),
+            timestamp,
+            timestamp,
+        ),
     )
     version_id = int(cur.lastrowid)
-    dimension_groups = [
-        ("MCM", config.MCM_DIMENSIONS), ("SMCE", config.SMCE_DIMENSIONS),
-        ("ENABLER", config.ENABLER_DIMENSIONS), ("OUTCOME", config.OUTCOME_DIMENSIONS),
-    ]
-    order = 0
-    for construct, dimensions in dimension_groups:
-        for code, name_ar, name_en in dimensions:
-            order += 1
-            db.execute(
-                "INSERT OR IGNORE INTO dimensions(version_id,code,construct,name,name_en,weight,sort_order) VALUES (?,?,?,?,?,?,?)",
-                (version_id, code, construct, name_ar, name_en, 1, order),
-            )
-    scale = db.execute(
-        "INSERT INTO scales(version_id,code,response_type,min_value,max_value) VALUES (?,?,?,?,?)",
-        (version_id, "LIKERT_1_5", "LIKERT", 1, 5),
-    ).lastrowid
-    labels = [(1, "لا أوافق بشدة", "Strongly disagree"), (2, "لا أوافق", "Disagree"), (3, "محايد", "Neutral"), (4, "أوافق", "Agree"), (5, "أوافق بشدة", "Strongly agree")]
-    for value, ar, en in labels:
-        db.execute("INSERT INTO scale_values(scale_id,value,label_ar,label_en) VALUES (?,?,?,?)", (scale, value, ar, en))
-    item_order = 0
-    for construct, dimensions in dimension_groups:
-        for code, _, _ in dimensions:
-            for index, prompt in enumerate(config.ITEM_PROMPTS[code], 1):
-                item_order += 1
-                required = 0 if construct == "OUTCOME" else 1
-                db.execute(
-                    """INSERT INTO items(version_id,code,construct,dimension_code,prompt_ar,prompt_en,source,lifecycle_status,reverse_coded,required,weight,response_type,min_value,max_value,sort_order)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (version_id, f"{code}_{index:02d}", construct, code, prompt, None, "Provisional model derived from eight synthetic qualitative cases; quantitative validation required", "PILOT", 0, required, 1, "LIKERT", 1, 5, item_order),
-                )
-    for level in config.MATURITY_LEVELS:
+
+    for dimension in config.INSTRUMENT_DIMENSIONS:
         db.execute(
-            "INSERT INTO maturity_levels(version_id,code,label_ar,label_en,min_score,max_score,level_order) VALUES (?,?,?,?,?,?,?)",
-            (version_id, *level),
+            """INSERT INTO dimensions(
+                 version_id,code,construct,name,name_en,weight,source_type,source_reference,sort_order
+               ) VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                version_id,
+                dimension["code"],
+                dimension["construct"],
+                dimension["name_ar"],
+                dimension.get("name_en"),
+                float(dimension.get("weight", 1)),
+                dimension.get("source_type"),
+                dimension.get("source_reference"),
+                int(dimension.get("display_order", 0)),
+            ),
+        )
+
+    scale_ranges: dict[str, tuple[float, float]] = {}
+    for scale_code, values in config.SCALE_DEFINITIONS.items():
+        numeric_values = [float(row["value"]) for row in values]
+        scale_ranges[scale_code] = (min(numeric_values), max(numeric_values))
+        response_types = {
+            str(item.get("response_type") or "LIKERT")
+            for item in config.INSTRUMENT_ITEMS
+            if item.get("scale_code") == scale_code
+        }
+        response_type = sorted(response_types)[0] if len(response_types) == 1 else "LIKERT"
+        scale_id = db.execute(
+            "INSERT INTO scales(version_id,code,response_type,min_value,max_value) VALUES (?,?,?,?,?)",
+            (version_id, scale_code, response_type, *scale_ranges[scale_code]),
+        ).lastrowid
+        for scale_value in values:
+            db.execute(
+                "INSERT INTO scale_values(scale_id,value,label_ar,label_en,missing_type) VALUES (?,?,?,?,NULL)",
+                (
+                    scale_id,
+                    float(scale_value["value"]),
+                    scale_value.get("label_ar"),
+                    scale_value.get("label_en"),
+                ),
+            )
+        if str(metadata.get("allow_not_applicable", "NO")).upper() == "YES":
+            db.execute(
+                "INSERT INTO scale_values(scale_id,value,label_ar,label_en,missing_type) VALUES (?,NULL,?,?,?)",
+                (scale_id, "لا ينطبق", "Not applicable", metadata.get("not_applicable_code", "NOT_APPLICABLE")),
+            )
+        if str(metadata.get("allow_dont_know", "NO")).upper() == "YES":
+            db.execute(
+                "INSERT INTO scale_values(scale_id,value,label_ar,label_en,missing_type) VALUES (?,NULL,?,?,?)",
+                (scale_id, "لا أعرف", "Don't know", metadata.get("dont_know_code", "DONT_KNOW")),
+            )
+
+    for order, field in enumerate(config.INSTRUMENT_PROFILE_FIELDS, 1):
+        db.execute(
+            """INSERT INTO instrument_profile_fields(
+                 version_id,code,construct,label_ar,label_en,response_type,
+                 include_in_score,source_reference,sort_order
+               ) VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                version_id,
+                field["code"],
+                field.get("construct", "CONTEXT"),
+                field["label_ar"],
+                field.get("label_en"),
+                field["response_type"],
+                int(bool(field.get("include_in_score", False))),
+                field.get("source_reference"),
+                order,
+            ),
+        )
+
+    for item in config.INSTRUMENT_ITEMS:
+        scale_code = item["scale_code"]
+        minimum, maximum = scale_ranges[scale_code]
+        source_type = item.get("source_type")
+        source_reference = item.get("source_reference")
+        source = ":".join(filter(None, (source_type, source_reference))) or None
+        db.execute(
+            """INSERT INTO items(
+                 version_id,code,construct,dimension_code,prompt_ar,prompt_en,source,lifecycle_status,
+                 reverse_coded,required,weight,response_type,scale_code,include_in_score,score_group,
+                 source_type,source_reference,min_value,max_value,sort_order
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                version_id,
+                item["code"],
+                item["construct"],
+                item["dimension_code"],
+                item["prompt_ar"],
+                item.get("prompt_en"),
+                source,
+                item.get("item_status", "EXPERT_REVIEW"),
+                int(bool(item.get("reverse_coded", False))),
+                int(bool(item.get("required", True))),
+                float(item.get("weight", 1)),
+                item.get("response_type", "LIKERT"),
+                scale_code,
+                int(bool(item.get("include_in_score", True))),
+                item.get("score_group"),
+                source_type,
+                source_reference,
+                minimum,
+                maximum,
+                int(item.get("display_order", 0)),
+            ),
+        )
+
+    for level in config.INSTRUMENT_MATURITY_LEVELS:
+        db.execute(
+            """INSERT INTO maturity_levels(
+                 version_id,code,label_ar,label_en,min_score,max_score,
+                 threshold_status,source_reference,level_order
+               ) VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                version_id,
+                level["code"],
+                level["label_ar"],
+                level["label_en"],
+                float(level["min_score"]),
+                float(level["max_score"]),
+                level.get("threshold_status", "PROVISIONAL_LABEL_ONLY"),
+                level.get("source_reference"),
+                int(level["level_order"]),
+            ),
         )
     for code, name_ar, dimensions, operator, threshold, severity, confidence in config.DIAGNOSTIC_RULES:
         db.execute(
@@ -738,8 +996,8 @@ def _ensure_seed_data(db: sqlite3.Connection) -> None:
         (instrument_id,),
     ).fetchall()
     existing = {row["version"] for row in versions}
-    if "0.3.0" not in existing:
-        _seed_version(db, instrument_id, "0.3.0")
+    if "0.4.0" not in existing:
+        _seed_version(db, instrument_id, "0.4.0")
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('MIN_BENCHMARK_SAMPLE','10',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('GAP_THRESHOLD','15',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('PRIORITY_WEIGHTS',?,?)", (json.dumps({"gap": 0.45, "impact": 0.25, "dependency": 0.15, "effort": 0.10, "confidence": 0.05}), timestamp))
@@ -758,6 +1016,7 @@ def init_db() -> None:
         _ensure_seed_data(db)
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (1,'full_platform_baseline',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (2,'direct_participant_context_and_revised_model',?)", (now(),))
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (3,'scientific_instrument_v02_platform_v040',?)", (now(),))
         db.execute("PRAGMA optimize")
         db.commit()
     finally:
