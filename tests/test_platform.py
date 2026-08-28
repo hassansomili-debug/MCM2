@@ -25,6 +25,11 @@ from mcm.scoring import _normalize
 class PlatformJourneyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # `connect()` prefers DATABASE_URL over DB_PATH, so a developer whose
+        # .env points at Supabase would otherwise run these write-heavy
+        # journeys against the production database. Force the SQLite path.
+        config.DATABASE_URL = ""
+        config.DATABASE_MIGRATION_URL = ""
         cls.tempdir = tempfile.TemporaryDirectory()
         config.DB_PATH = Path(cls.tempdir.name) / "test.sqlite3"
         config.PLATFORM_ADMIN_EMAIL = "platform-admin@example.test"
