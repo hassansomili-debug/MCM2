@@ -260,6 +260,21 @@ CREATE TABLE IF NOT EXISTS assessments (
   FOREIGN KEY(version_id) REFERENCES instrument_versions(id),
   FOREIGN KEY(parent_assessment_id) REFERENCES assessments(id)
 );
+CREATE TABLE IF NOT EXISTS assessment_context (
+  assessment_id INTEGER PRIMARY KEY,
+  sector TEXT NOT NULL,
+  firm_size TEXT NOT NULL,
+  firm_age_years INTEGER NOT NULL,
+  region TEXT NOT NULL,
+  social_platform_count INTEGER NOT NULL,
+  respondent_role TEXT NOT NULL,
+  leadership_support REAL NOT NULL,
+  human_competencies REAL NOT NULL,
+  technology_infrastructure REAL NOT NULL,
+  data_readiness REAL NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(assessment_id) REFERENCES assessments(id)
+);
 CREATE TABLE IF NOT EXISTS participants (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   research_id TEXT UNIQUE,
@@ -553,6 +568,7 @@ CREATE TABLE IF NOT EXISTS system_configuration (
 CREATE INDEX IF NOT EXISTS idx_memberships_org ON memberships(organization_id, role);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_expiry ON sessions(user_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_assessments_org_status ON assessments(organization_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_assessment_context_demographics ON assessment_context(sector, firm_size, region);
 CREATE INDEX IF NOT EXISTS idx_responses_assessment ON responses(assessment_id, participant_id);
 CREATE INDEX IF NOT EXISTS idx_dimension_scores_assessment ON dimension_scores(assessment_id, construct);
 CREATE INDEX IF NOT EXISTS idx_score_runs_assessment ON score_runs(assessment_id, is_current, created_at);
@@ -632,7 +648,7 @@ def _seed_version(db: sqlite3.Connection, instrument_id: int, version: str) -> i
         "INSERT INTO scales(version_id,code,response_type,min_value,max_value) VALUES (?,?,?,?,?)",
         (version_id, "LIKERT_1_5", "LIKERT", 1, 5),
     ).lastrowid
-    labels = [(1, "لا ينطبق إطلاقًا", "Not at all"), (2, "ينطبق بدرجة ضعيفة", "Slightly"), (3, "ينطبق جزئيًا", "Partly"), (4, "ينطبق بدرجة كبيرة", "Mostly"), (5, "ينطبق بالكامل", "Fully")]
+    labels = [(1, "لا أوافق بشدة", "Strongly disagree"), (2, "لا أوافق", "Disagree"), (3, "محايد", "Neutral"), (4, "أوافق", "Agree"), (5, "أوافق بشدة", "Strongly agree")]
     for value, ar, en in labels:
         db.execute("INSERT INTO scale_values(scale_id,value,label_ar,label_en) VALUES (?,?,?,?)", (scale, value, ar, en))
     item_order = 0
@@ -644,7 +660,7 @@ def _seed_version(db: sqlite3.Connection, instrument_id: int, version: str) -> i
                 db.execute(
                     """INSERT INTO items(version_id,code,construct,dimension_code,prompt_ar,prompt_en,source,lifecycle_status,reverse_coded,required,weight,response_type,min_value,max_value,sort_order)
                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (version_id, f"{code}_{index:02d}", construct, code, prompt, None, "DEMO provisional item bank - not empirically validated", "PILOT", 0, required, 1, "LIKERT", 1, 5, item_order),
+                    (version_id, f"{code}_{index:02d}", construct, code, prompt, None, "Provisional model derived from eight synthetic qualitative cases; quantitative validation required", "PILOT", 0, required, 1, "LIKERT", 1, 5, item_order),
                 )
     for level in config.MATURITY_LEVELS:
         db.execute(
@@ -671,31 +687,40 @@ def _ensure_seed_data(db: sqlite3.Connection) -> None:
     if not organization:
         organization_id = db.execute(
             "INSERT INTO organizations(name,locale,sector,size,country,region,data_origin,created_at) VALUES (?,?,?,?,?,?,?,?)",
-            (config.BOOTSTRAP_ORG_NAME, "ar", "التسويق الرقمي" if config.SEED_DEMO else None, "SMALL" if config.SEED_DEMO else None, "Saudi Arabia", "Riyadh", "DEMO" if config.SEED_DEMO else "TEST", timestamp),
+            (config.BOOTSTRAP_ORG_NAME, "ar", None, None, "Saudi Arabia", "Riyadh", "TEST", timestamp),
         ).lastrowid
     else:
         organization_id = organization["id"]
     db.execute(
         "INSERT OR IGNORE INTO company_profiles(organization_id,website,business_model,employee_count,communication_team_size,completion,updated_at) VALUES (?,?,?,?,?,?,?)",
-        (organization_id, "https://example.com", "B2B", "11-50", "2-5", 100, timestamp),
+        (organization_id, None, None, None, None, 0, timestamp),
     )
-    seed_users = [(config.PLATFORM_ADMIN_EMAIL, "مدير منصة نضج", config.PLATFORM_ADMIN_PASSWORD, "SUPER_ADMIN")]
-    if config.SEED_DEMO:
-        seed_users.insert(0, (config.DEMO_EMAIL, "سارة الحربي", config.DEMO_PASSWORD, "COMPANY_ADMIN"))
-    for email, name, password, role in seed_users:
-        row = db.execute("SELECT id FROM users WHERE lower(email)=?", (email,)).fetchone()
-        if row:
-            user_id = row["id"]
-        else:
-            user_id = db.execute(
-                "INSERT INTO users(email,name,password_hash,preferred_language,verified,is_active,created_at) VALUES (?,?,?,?,?,?,?)",
-                (email, name, password_hash(password), "ar", 1, 1, timestamp),
-            ).lastrowid
+    for obsolete in db.execute("SELECT id FROM users WHERE lower(email)='sara@example.com'").fetchall():
+        obsolete_id = int(obsolete["id"])
+        db.execute("UPDATE participants SET user_id=NULL WHERE user_id=?", (obsolete_id,))
+        db.execute("UPDATE audit_logs SET user_id=NULL WHERE user_id=?", (obsolete_id,))
+        for table in ("sessions", "password_reset_tokens", "memberships", "notifications", "user_settings"):
+            db.execute(f"DELETE FROM {table} WHERE user_id=?", (obsolete_id,))
+        db.execute("DELETE FROM consents WHERE user_id=?", (obsolete_id,))
+        db.execute("DELETE FROM users WHERE id=?", (obsolete_id,))
+
+    row = db.execute("SELECT id,password_hash FROM users WHERE lower(email)=?", (config.PLATFORM_ADMIN_EMAIL,)).fetchone()
+    if row:
+        user_id = int(row["id"])
         db.execute(
-            "INSERT OR IGNORE INTO memberships(user_id,organization_id,role,status) VALUES (?,?,?,?)",
-            (user_id, organization_id, role, "ACTIVE"),
+            "UPDATE users SET name=?,preferred_language='ar',verified=1,is_active=1 WHERE id=?",
+            (config.PLATFORM_ADMIN_NAME, user_id),
         )
-        db.execute("INSERT OR IGNORE INTO user_settings(user_id) VALUES (?)", (user_id,))
+    else:
+        user_id = db.execute(
+            "INSERT INTO users(email,name,password_hash,preferred_language,verified,is_active,created_at) VALUES (?,?,?,?,?,?,?)",
+            (config.PLATFORM_ADMIN_EMAIL, config.PLATFORM_ADMIN_NAME, password_hash(config.PLATFORM_ADMIN_PASSWORD), "ar", 1, 1, timestamp),
+        ).lastrowid
+    db.execute(
+        "INSERT INTO memberships(user_id,organization_id,role,status) VALUES (?,?,?,?) ON CONFLICT(user_id,organization_id) DO UPDATE SET role='SUPER_ADMIN',status='ACTIVE'",
+        (user_id, organization_id, "SUPER_ADMIN", "ACTIVE"),
+    )
+    db.execute("INSERT OR IGNORE INTO user_settings(user_id) VALUES (?)", (user_id,))
     instrument = db.execute("SELECT id FROM instruments WHERE code='MCM_CORE' ORDER BY id LIMIT 1").fetchone()
     if instrument:
         instrument_id = instrument["id"]
@@ -712,24 +737,16 @@ def _ensure_seed_data(db: sqlite3.Connection) -> None:
            WHERE v.instrument_id=? GROUP BY v.id ORDER BY v.id""",
         (instrument_id,),
     ).fetchall()
-    if not versions:
-        _seed_version(db, instrument_id, "0.1.0")
-    elif max(row["item_count"] for row in versions) < 51:
-        existing = {row["version"] for row in versions}
-        version = "0.2.0"
-        counter = 2
-        while version in existing:
-            counter += 1
-            version = f"0.{counter}.0"
-        _seed_version(db, instrument_id, version)
+    existing = {row["version"] for row in versions}
+    if "0.3.0" not in existing:
+        _seed_version(db, instrument_id, "0.3.0")
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('MIN_BENCHMARK_SAMPLE','10',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('GAP_THRESHOLD','15',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('PRIORITY_WEIGHTS',?,?)", (json.dumps({"gap": 0.45, "impact": 0.25, "dependency": 0.15, "effort": 0.10, "confidence": 0.05}), timestamp))
-    demo_user = db.execute("SELECT id FROM users WHERE lower(email)=?", (config.DEMO_EMAIL,)).fetchone() if config.SEED_DEMO else None
-    if demo_user and not db.execute("SELECT 1 FROM notifications WHERE user_id=? LIMIT 1", (demo_user["id"],)).fetchone():
+    if not db.execute("SELECT 1 FROM notifications WHERE user_id=? LIMIT 1", (user_id,)).fetchone():
         db.execute(
             "INSERT INTO notifications(user_id,type,title,body,target_url,created_at) VALUES (?,?,?,?,?,?)",
-            (demo_user["id"], "WELCOME", "مرحبًا بك في نضج MCM", "أكمل ملف الشركة ثم ابدأ أول تقييم بحثي.", "#assessment", timestamp),
+            (user_id, "WELCOME", "مرحبًا بك في مقياس النضج الاتصالي التسويقي", "يمكن للمشاركين البدء مباشرة، ويمكنك متابعة الحالات وتصدير بيانات SPSS.", "#research", timestamp),
         )
 
 
@@ -740,6 +757,7 @@ def init_db() -> None:
         _migrate_legacy(db)
         _ensure_seed_data(db)
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (1,'full_platform_baseline',?)", (now(),))
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (2,'direct_participant_context_and_revised_model',?)", (now(),))
         db.execute("PRAGMA optimize")
         db.commit()
     finally:

@@ -7,3 +7,5 @@
 - `SUPER_ADMIN`: manages platform users/roles/configuration, instrument governance, research operations and audited exports.
 
 An invited external participant opens the token, accepts required service consent and optional research consent separately, answers through the participant session, and submits once. In a multi-respondent assessment, the assessment remains in progress until every accepted participant has submitted; only then does the server calculate the shared result.
+
+A direct participant opens the public homepage, selects “ابدأ المقياس”, records the organization demographics and four enabling conditions, accepts service consent, and starts immediately without an account or invitation. The enabling conditions are prefilled as context items, the participant answers MCM and SMCE using verbal Likert labels, and the completed single-participant case immediately displays the five-stage classification, dimension charts, and the provisional MCM–SMCE relationship interpretation.

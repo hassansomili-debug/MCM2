@@ -28,7 +28,7 @@ from .scoring import (
 )
 
 
-PUBLIC_FILES = {"index.html", "app.js", "styles.css", "import.css", "platform.css", "og.png", "favicon.svg"}
+PUBLIC_FILES = {"index.html", "app.js", "styles.css", "import.css", "platform.css", "og.png", "og-mcm-v2.png", "favicon.svg"}
 ALLOWED_MISSING = {"NOT_ANSWERED", "NOT_APPLICABLE", "SKIPPED", "TECHNICAL_MISSING"}
 ROADMAP_STATUSES = {"NOT_STARTED", "IN_PROGRESS", "COMPLETED", "DEFERRED"}
 PRIVILEGED_ASSESSMENT_ROLES = {"COMPANY_ADMIN", "CONSULTANT", "SUPER_ADMIN"}
@@ -279,12 +279,13 @@ class API(BaseHTTPRequestHandler):
         if method == "GET" and path == "/api/public-config":
             return self.send_json({
                 "registration_enabled": config.ALLOW_REGISTRATION,
-                "demo_enabled": config.PUBLIC_DEMO,
-                "demo_email": config.DEMO_EMAIL if config.PUBLIC_DEMO else None,
-                "demo_password": config.DEMO_PASSWORD if config.PUBLIC_DEMO else None,
+                "direct_participant_enabled": True,
+                "platform_name": "مقياس النضج الاتصالي التسويقي",
                 "storage": "ephemeral-demo" if config.EPHEMERAL_STORAGE else "persistent-configured",
                 "notice": "بيئة عرض مؤقتة؛ لا تستخدم بيانات حقيقية." if config.EPHEMERAL_STORAGE else None,
             })
+        if method == "POST" and path == "/api/public/assessments":
+            return self._public_assessment(data)
         if path.startswith("/api/auth/"):
             return self._auth(method, path, data)
         if path.startswith("/api/invitations/") and path.endswith("/accept") and method == "POST":
@@ -317,6 +318,136 @@ class API(BaseHTTPRequestHandler):
         if path.startswith("/api/admin"):
             return self._admin(method, path, data, context)
         raise APIError("route_not_found", 404)
+
+    def _public_assessment(self, data: dict):
+        """Create an anonymous SME assessment and a participant session in one step."""
+        self._rate_limit("public_assessment", 12, 3600)
+        organization_name = str(data.get("organization_name") or "").strip()
+        sector = str(data.get("sector") or "").strip()
+        firm_size = str(data.get("firm_size") or "").strip().upper()
+        region = str(data.get("region") or "").strip()
+        respondent_role = str(data.get("respondent_role") or "").strip()
+        if not bool(data.get("service_consent")):
+            raise APIError("service_consent_required", 422)
+        if not 2 <= len(organization_name) <= 120:
+            raise APIError("organization_name_required", 422)
+        if not 2 <= len(sector) <= 100:
+            raise APIError("sector_required", 422)
+        if firm_size not in {"MICRO", "SMALL", "MEDIUM"}:
+            raise APIError("sme_size_required", 422)
+        if not 2 <= len(region) <= 100:
+            raise APIError("region_required", 422)
+        if not 2 <= len(respondent_role) <= 100:
+            raise APIError("respondent_role_required", 422)
+        try:
+            firm_age_years = int(data.get("firm_age_years"))
+            social_platform_count = int(data.get("social_platform_count"))
+        except (TypeError, ValueError) as exc:
+            raise APIError("invalid_demographics", 422) from exc
+        if not 0 <= firm_age_years <= 200 or not 0 <= social_platform_count <= 50:
+            raise APIError("invalid_demographics", 422)
+        enablers = data.get("enablers")
+        if not isinstance(enablers, dict):
+            raise APIError("enablers_required", 422)
+        enabler_keys = {
+            "leadership_support": "ENA01",
+            "human_competencies": "ENA02",
+            "technology_infrastructure": "ENA03",
+            "data_readiness": "ENA04",
+        }
+        parsed_enablers = {}
+        for key in enabler_keys:
+            try:
+                value = float(enablers.get(key))
+            except (TypeError, ValueError) as exc:
+                raise APIError("invalid_enabler_rating", 422, {"field": key}) from exc
+            if value not in {1.0, 2.0, 3.0, 4.0, 5.0}:
+                raise APIError("invalid_enabler_rating", 422, {"field": key})
+            parsed_enablers[key] = value
+
+        db = connect()
+        try:
+            version = db.execute(
+                "SELECT * FROM instrument_versions WHERE status IN ('PILOT','VALIDATED','PUBLISHED','published') ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            admin = db.execute("SELECT id FROM users WHERE lower(email)=? AND is_active=1", (config.PLATFORM_ADMIN_EMAIL,)).fetchone()
+            if not version or not admin:
+                raise APIError("platform_not_ready", 503)
+            timestamp = now()
+            origin = "DEMO" if config.EPHEMERAL_STORAGE else "REAL"
+            organization_id = db.execute(
+                "INSERT INTO organizations(name,locale,sector,size,country,region,data_origin,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                (organization_name, "ar", sector, firm_size, "Saudi Arabia", region, origin, timestamp),
+            ).lastrowid
+            db.execute(
+                "INSERT INTO company_profiles(organization_id,research_consent,completion,updated_at) VALUES (?,?,?,?)",
+                (organization_id, int(bool(data.get("research_consent"))), 100, timestamp),
+            )
+            db.execute(
+                "INSERT INTO memberships(user_id,organization_id,role,status) VALUES (?,?,?,?)",
+                (admin["id"], organization_id, "SUPER_ADMIN", "ACTIVE"),
+            )
+            assessment_id = db.execute(
+                """INSERT INTO assessments(organization_id,version_id,created_by,assessment_type,status,data_origin,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (organization_id, version["id"], admin["id"], "FULL", "IN_PROGRESS", origin, timestamp, timestamp),
+            ).lastrowid
+            db.execute(
+                """INSERT INTO assessment_context(
+                     assessment_id,sector,firm_size,firm_age_years,region,social_platform_count,respondent_role,
+                     leadership_support,human_competencies,technology_infrastructure,data_readiness,created_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (assessment_id, sector, firm_size, firm_age_years, region, social_platform_count, respondent_role,
+                 parsed_enablers["leadership_support"], parsed_enablers["human_competencies"],
+                 parsed_enablers["technology_infrastructure"], parsed_enablers["data_readiness"], timestamp),
+            )
+            participant_id = db.execute(
+                "INSERT INTO participants(organization_id,full_name,email,job_title,created_at) VALUES (?,?,?,?,?)",
+                (organization_id, "مشارك مباشر", None, respondent_role, timestamp),
+            ).lastrowid
+            db.execute("UPDATE participants SET research_id=? WHERE id=?", (f"P{participant_id:06d}", participant_id))
+            db.execute(
+                "INSERT INTO assessment_participants(assessment_id,participant_id,assessment_role,status) VALUES (?,?,?,?)",
+                (assessment_id, participant_id, "RESPONDENT", "ACCEPTED"),
+            )
+            for consent_type, accepted in (
+                ("SERVICE_DIAGNOSTIC", 1),
+                ("RESEARCH_USE", int(bool(data.get("research_consent")))),
+            ):
+                db.execute(
+                    "INSERT INTO consents(participant_id,consent_type,consent_version,accepted,accepted_at) VALUES (?,?,?,?,?)",
+                    (participant_id, consent_type, "1.0", accepted, timestamp),
+                )
+            for key, dimension_code in enabler_keys.items():
+                item = db.execute(
+                    "SELECT id FROM items WHERE version_id=? AND dimension_code=? ORDER BY sort_order,id LIMIT 1",
+                    (version["id"], dimension_code),
+                ).fetchone()
+                if item:
+                    db.execute(
+                        """INSERT INTO responses(assessment_id,participant_id,item_id,numeric_value,created_at,updated_at)
+                           VALUES (?,?,?,?,?,?)""",
+                        (assessment_id, participant_id, item["id"], parsed_enablers[key], timestamp, timestamp),
+                    )
+            session_raw = secrets.token_urlsafe(36)
+            db.execute(
+                "INSERT INTO participant_sessions(token,participant_id,name,email,assessment_id,expires_at) VALUES (?,?,?,?,?,?)",
+                (token_hash(session_raw), participant_id, "مشارك مباشر", f"participant-{participant_id}@anonymous.invalid", assessment_id, timestamp + config.INVITATION_TTL),
+            )
+            audit(db, None, "public_assessment_created", "assessment", assessment_id, {"firm_size": firm_size, "data_origin": origin})
+            db.commit()
+            return self.send_json({
+                "token": session_raw,
+                "assessment_id": assessment_id,
+                "participant_id": participant_id,
+                "instrument_status": version["status"],
+                "storage": "ephemeral-demo" if config.EPHEMERAL_STORAGE else "persistent-configured",
+            }, 201)
+        except sqlite3.IntegrityError as exc:
+            db.rollback()
+            raise APIError("assessment_creation_failed", 409) from exc
+        finally:
+            db.close()
 
     def _new_session(self, db, user_id: int, organization_id: int) -> str:
         raw = secrets.token_urlsafe(36)
@@ -627,7 +758,9 @@ class API(BaseHTTPRequestHandler):
                 items = [dict(row) for row in db.execute("SELECT id,code,construct,dimension_code,prompt_ar,prompt_en,required,response_type,min_value,max_value FROM items WHERE version_id=? ORDER BY sort_order,id", (assessment["version_id"],))]
                 responses = {row["item_id"]: {"value": row["numeric_value"] if row["numeric_value"] is not None else row["text_value"], "missing_type": row["missing_type"]} for row in db.execute("SELECT item_id,numeric_value,text_value,missing_type FROM responses WHERE assessment_id=? AND participant_id=?", (assessment["id"], session["participant_id"] or 0))}
                 review = assessment_review(db, assessment["id"], participant_id)
-                return self.send_json({"participant": {"name": session["name"]}, "assessment": {"id": assessment["id"], "status": assessment["status"], "participant_status": membership["status"]}, "items": items, "responses": responses, "review": review})
+                assessment_context = db.execute("SELECT * FROM assessment_context WHERE assessment_id=?", (assessment["id"],)).fetchone()
+                completed_result = score_payload(db, assessment["id"]) if assessment["status"] == "COMPLETED" and assessment_context else None
+                return self.send_json({"participant": {"name": session["name"]}, "assessment": {"id": assessment["id"], "status": assessment["status"], "participant_status": membership["status"]}, "context": _row(assessment_context), "items": items, "responses": responses, "review": review, "result": completed_result})
             if method == "POST" and action == "answers":
                 if membership["status"] == "COMPLETED":
                     raise APIError("participant_submission_locked", 409)

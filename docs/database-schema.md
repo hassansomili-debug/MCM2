@@ -32,6 +32,7 @@ The current SQLite implementation stores the stable item and version-specific wo
 | Tables | Purpose |
 | --- | --- |
 | `assessments` | Tenant, version, type, origin, status, timestamps and reassessment parent. |
+| `assessment_context` | Per-case SME demographics and four enabling conditions, retained outside the MCM score denominator. |
 | `participants`, `assessment_participants`, `participant_sessions`, `invitations` | Multi-respondent identity boundary and invitation access. |
 | `responses` | Raw numeric/text value or missing type, unique per assessment/participant/item. |
 | `score_runs` | Append-only run number, scoring/configuration snapshot and input/output hashes. |
@@ -45,7 +46,7 @@ The legacy `answers` and `scores` tables remain only for safe migration of the e
 | Tables | Purpose |
 | --- | --- |
 | `diagnostic_results`, `assessment_recommendations`, `roadmap_items` | Evidence, ranked improvement work and execution status. |
-| `reports`, `research_exports` | Audited generation requests; files are regenerated from authorized database state. |
+| `reports`, `research_exports` | Audited generation requests with immutable report/export payloads and hashes. |
 | `data_quality_flags` | Straight-line, incomplete and related quality findings. |
 | `audit_logs` | Actor, action, entity and safe JSON metadata. |
 | `system_configuration` | Typed JSON configuration such as minimum benchmark N, gap threshold and priority weights. |

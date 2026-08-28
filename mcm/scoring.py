@@ -313,6 +313,35 @@ def score_payload(db, assessment_id: int) -> dict:
             })
     mcm = totals.get("MCM")
     smce = totals.get("SMCE")
+    mcm_total = float(mcm["total_score"]) if mcm else None
+    smce_total = float(smce["total_score"]) if smce else None
+    relationship = None
+    if mcm_total is not None and smce_total is not None:
+        efficiency_gap = round(smce_total - mcm_total, 2)
+        if abs(efficiency_gap) <= 10:
+            alignment_code = "ALIGNED"
+            narrative = "يتحرك النضج المؤسسي والكفاءة الاتصالية ضمن نطاق متقارب."
+        elif efficiency_gap < 0:
+            alignment_code = "MATURITY_NOT_FULLY_CONVERTED"
+            narrative = "قدرات النضج أعلى من الكفاءة المرصودة؛ الأولوية لترجمة القدرات المؤسسية إلى أداء اتصالي يومي."
+        else:
+            alignment_code = "EFFICIENCY_AHEAD_OF_MATURITY"
+            narrative = "الكفاءة المرصودة أعلى من مستوى المأسسة؛ الأولوية لتثبيت الممارسات وتقليل اعتمادها على الأفراد."
+        relationship = {
+            "model": "MCM_TO_SMCE_PROPOSED_POSITIVE_EFFECT",
+            "status": "PROVISIONAL_ASSOCIATION_NOT_CAUSAL",
+            "mcm_total": round(mcm_total, 2),
+            "smce_total": round(smce_total, 2),
+            "efficiency_minus_maturity": efficiency_gap,
+            "alignment_code": alignment_code,
+            "narrative_ar": narrative,
+            "interpretation_ar": "يعامل النموذج النضج الاتصالي التسويقي قدرة مؤسسية أعلى رتبة، والكفاءة الاتصالية عبر التواصل الاجتماعي نتيجة اتصالية لاحقة مقترحة.",
+        }
+    context = db.execute("SELECT * FROM assessment_context WHERE assessment_id=?", (assessment_id,)).fetchone()
+    progression = [dict(row) for row in db.execute(
+        "SELECT code,label_ar,label_en,min_score,max_score,level_order FROM maturity_levels WHERE version_id=? ORDER BY level_order",
+        (assessment["version_id"],),
+    )]
     return {
         "assessment_id": assessment_id,
         "organization_name": assessment["organization_name"],
@@ -324,13 +353,16 @@ def score_payload(db, assessment_id: int) -> dict:
         "data_origin": assessment["data_origin"],
         "scores": {
             "MCM": {
-                "total": mcm["total_score"] if mcm else None,
+                "total": mcm_total,
                 "maturity_level": ({"code": mcm["level_code"], "label_ar": mcm["label_ar"], "label_en": mcm["label_en"], "order": mcm["level_order"]} if mcm and mcm["level_code"] else None),
                 "dimensions": grouped["MCM"],
             },
-            "SMCE": {"total": smce["total_score"] if smce else None, "dimensions": grouped["SMCE"]},
+            "SMCE": {"total": smce_total, "dimensions": grouped["SMCE"]},
         },
-        "classification_notice": "Research Beta - the instrument is undergoing empirical validation.",
+        "context": dict(context) if context else None,
+        "relationship": relationship,
+        "maturity_progression": progression,
+        "classification_notice": "تصنيف تشخيصي أولي ضمن نموذج بحثي قيد التحقق الكمي؛ لا يمثل إثباتًا سببيًا أو اعتمادًا علميًا نهائيًا.",
     }
 
 

@@ -15,4 +15,6 @@ Explicit missing states are `NOT_ANSWERED`, `NOT_APPLICABLE`, `SKIPPED`, and `TE
 
 Every final calculation creates an append-only `score_runs` record containing the instrument version, scoring method, configuration snapshot, response input hash and output hash. Current materialized score tables can be rebuilt; prior score-run evidence is retained.
 
-The bundled maturity boundaries are provisional configuration for Research Beta. Only MCM receives a maturity label. They are not a validity claim.
+The bundled maturity boundaries are provisional configuration for Research Beta. Only MCM receives one of five labels: `REACTIVE`, `RESPONSIVE`, `MANAGED_INTEGRATED`, `PROACTIVE_ADAPTIVE`, or `INSTITUTIONALISED_INTELLIGENT`. They are not a validity claim.
+
+After calculating both constructs, the response also reports `SMCE - MCM` and one deterministic alignment interpretation. This is a descriptive diagnostic bridge between the constructs. It does not change either total and is explicitly marked `PROVISIONAL_ASSOCIATION_NOT_CAUSAL` until quantitative testing supports the proposed positive effect.

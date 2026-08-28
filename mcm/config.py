@@ -41,20 +41,17 @@ RESET_TTL = int(os.environ.get("MCM_RESET_TTL", "1800"))
 ALLOWED_ORIGIN = os.environ.get("MCM_ALLOWED_ORIGIN", "same-origin")
 MAX_DOCX_BYTES = int(os.environ.get("MCM_MAX_DOCX_BYTES", str(8 * 1024 * 1024)))
 
-PLATFORM_ADMIN_EMAIL = os.environ.get("MCM_ADMIN_EMAIL", "admin@nudj.local").lower()
-PLATFORM_ADMIN_PASSWORD = os.environ.get("MCM_ADMIN_PASSWORD") or (secrets.token_urlsafe(32) if os.environ.get("VERCEL") else "Nudj-Admin-2026!")
-DEMO_EMAIL = os.environ.get("MCM_DEMO_EMAIL", "sara@example.com").lower()
-DEMO_PASSWORD = os.environ.get("MCM_DEMO_PASSWORD", "ChangeMe-2026")
-SEED_DEMO = os.environ.get("MCM_SEED_DEMO", "1" if ENVIRONMENT != "production" else "0") == "1"
+PLATFORM_ADMIN_EMAIL = os.environ.get("MCM_ADMIN_EMAIL", "hmsomili@gmail.com").lower()
+PLATFORM_ADMIN_NAME = os.environ.get("MCM_ADMIN_NAME", "مدير المنصة")
+PLATFORM_ADMIN_PASSWORD = os.environ.get("MCM_ADMIN_PASSWORD") or secrets.token_urlsafe(32)
 EXPOSE_DEV_RESET_TOKEN = os.environ.get("MCM_EXPOSE_DEV_RESET_TOKEN", "1" if ENVIRONMENT != "production" and not os.environ.get("VERCEL") else "0") == "1"
-BOOTSTRAP_ORG_NAME = os.environ.get("MCM_BOOTSTRAP_ORG_NAME", "إدارة منصة نضج" if ENVIRONMENT == "production" else "أفق الرقمية")
+BOOTSTRAP_ORG_NAME = os.environ.get("MCM_BOOTSTRAP_ORG_NAME", "إدارة مقياس النضج الاتصالي التسويقي")
 EPHEMERAL_STORAGE = bool(os.environ.get("VERCEL")) and str(DB_PATH).startswith("/tmp/")
 ALLOW_REGISTRATION = os.environ.get("MCM_ALLOW_REGISTRATION", "0" if EPHEMERAL_STORAGE else "1") == "1"
-PUBLIC_DEMO = os.environ.get("MCM_PUBLIC_DEMO", "1" if SEED_DEMO else "0") == "1"
 
 if ENVIRONMENT == "production":
-    if PLATFORM_ADMIN_PASSWORD == "Nudj-Admin-2026!" or len(PLATFORM_ADMIN_PASSWORD) < 16:
-        raise RuntimeError("MCM_ADMIN_PASSWORD must be a non-default secret of at least 16 characters in production")
+    if len(PLATFORM_ADMIN_PASSWORD) < 10:
+        raise RuntimeError("MCM_ADMIN_PASSWORD must be a private secret of at least 10 characters in production")
     if str(DB_PATH).startswith("/tmp/"):
         raise RuntimeError("MCM_DB_PATH must point to persistent storage in production")
     if EXPOSE_DEV_RESET_TOKEN:
@@ -83,8 +80,8 @@ MCM_DIMENSIONS = [
 ]
 
 SMCE_DIMENSIONS = [
-    ("SMCE01", "الاستجابة والحل", "Responsiveness and resolution"),
-    ("SMCE02", "جودة التفاعل", "Interaction quality"),
+    ("SMCE01", "كفاءة الاستجابة والحل", "Response and resolution efficiency"),
+    ("SMCE02", "جودة المعنى والتفاعل", "Meaning and interaction quality"),
     ("SMCE03", "كفاءة الفعل", "Action efficiency"),
     ("SMCE04", "انخفاض الاحتكاك الاتصالي", "Low communication friction"),
     ("SMCE05", "كفاءة الموارد وتحقيق الأهداف", "Resource and goal efficiency"),
@@ -92,9 +89,9 @@ SMCE_DIMENSIONS = [
 
 ENABLER_DIMENSIONS = [
     ("ENA01", "دعم القيادة", "Leadership support"),
-    ("ENA02", "الموارد والقدرات", "Resources and capabilities"),
-    ("ENA03", "البنية التقنية", "Technology foundation"),
-    ("ENA04", "الثقافة التعاونية", "Collaborative culture"),
+    ("ENA02", "الكفاءات البشرية", "Human competencies"),
+    ("ENA03", "البنية التحتية التقنية", "Technology infrastructure"),
+    ("ENA04", "جاهزية البيانات", "Data readiness"),
 ]
 
 OUTCOME_DIMENSIONS = [
@@ -105,11 +102,11 @@ OUTCOME_DIMENSIONS = [
 ]
 
 MATURITY_LEVELS = [
-    ("FOUNDATIONAL", "تأسيسي", "Foundational", 0.0, 20.0, 1),
-    ("EMERGING", "ناشئ", "Emerging", 20.0, 40.0, 2),
-    ("STRUCTURED", "منظّم", "Structured", 40.0, 60.0, 3),
-    ("INTEGRATED", "متكامل", "Integrated", 60.0, 80.0, 4),
-    ("OPTIMIZED", "متقدم", "Optimized", 80.0, 100.01, 5),
+    ("REACTIVE", "تفاعلي", "Reactive", 0.0, 20.0, 1),
+    ("RESPONSIVE", "مستجيب", "Responsive", 20.0, 40.0, 2),
+    ("MANAGED_INTEGRATED", "مُدار ومتكامل", "Managed & Integrated", 40.0, 60.0, 3),
+    ("PROACTIVE_ADAPTIVE", "استباقي ومتكيّف", "Proactive & Adaptive", 60.0, 80.0, 4),
+    ("INSTITUTIONALISED_INTELLIGENT", "مؤسسي وذكي", "Institutionalised & Intelligent", 80.0, 100.01, 5),
 ]
 
 ITEM_PROMPTS = {
@@ -181,9 +178,9 @@ ITEM_PROMPTS = {
         "تُعاد موازنة الوقت والميزانية استنادًا إلى النتائج الفعلية.",
     ],
     "ENA01": ["توفر القيادة رعاية واضحة لتطوير الاتصال المؤسسي."],
-    "ENA02": ["تتوفر موارد ومهارات كافية لتنفيذ خطط الاتصال."],
+    "ENA02": ["تتوفر لدى العاملين الكفاءات البشرية اللازمة لتنفيذ الاتصال وتطويره."],
     "ENA03": ["تدعم الأنظمة التقنية جمع البيانات وتبادلها بأمان."],
-    "ENA04": ["تشجع الثقافة الداخلية التعاون وتبادل المعرفة بين الفرق."],
+    "ENA04": ["تتوفر بيانات محدثة وموثوقة وجاهزة لدعم القرارات الاتصالية."],
     "OUT01": ["كيف تقيّم رضا أصحاب المصلحة عن الاتصال؟"],
     "OUT02": ["كيف تقيّم أثر الاتصال على الثقة والسمعة؟"],
     "OUT03": ["كيف تقيّم كفاءة استخدام ميزانية الاتصال؟"],

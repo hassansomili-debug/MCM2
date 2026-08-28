@@ -7,6 +7,8 @@ All JSON endpoints are same-origin under `/api`. Authenticated calls send `Autho
 | Method | Route | Purpose |
 | --- | --- | --- |
 | GET | `/api` or `/api/health` | Service health. |
+| GET | `/api/public-config` | Public branding, direct-entry and storage-mode flags; never returns credentials. |
+| POST | `/api/public/assessments` | Create an anonymous SME assessment, demographic snapshot and participant session without an account. |
 | POST | `/api/auth/register` | Create a user, organization, admin membership, settings and consents. |
 | POST | `/api/auth/login`, `/api/auth/logout` | Create/revoke session. |
 | POST | `/api/auth/forgot-password`, `/api/auth/reset-password` | One-time reset flow without account enumeration. |
@@ -58,7 +60,7 @@ DOCX payloads contain `filename`, the official Office MIME type and `docx_base64
 | POST | `/api/assessments/{id}/submit` | Lock, score, diagnose and create roadmap. |
 | POST | `/api/assessments/{id}/repeat` | Create a linked reassessment. |
 | GET | `/api/dashboard` | Tenant dashboard using real stored state. |
-| GET | `/api/results/{id}` | Separate MCM/SMCE totals, dimensions and score-run metadata. |
+| GET | `/api/results/{id}` | Separate MCM/SMCE totals, dimensions, five-stage classification, demographics and provisional relationship interpretation. |
 | GET | `/api/results/{id}/dimensions/{code}` | One dimension, evidence-safe diagnostics and recommendation. |
 | GET | `/api/results/{id}/smce` | Independent SMCE result and explicit comparison. |
 | GET | `/api/diagnostics/{id}`, `/api/gaps/{id}`, `/api/priorities/{id}` | Deterministic improvement evidence. |
@@ -90,4 +92,4 @@ Research routes require `RESEARCHER` or `SUPER_ADMIN`; admin routes require `SUP
 
 ## Score response guarantee
 
-The response contains `assessment_id`, `instrument_version_id`, `score_run`, `scores.MCM`, `scores.SMCE` and the Research Beta notice. MCM and SMCE totals never share dimensions, and every output can be traced to the frozen input/configuration hashes in `score_runs`.
+The response contains `assessment_id`, instrument metadata, `scores.MCM`, `scores.SMCE`, `context`, `maturity_progression`, `relationship` and the Research Beta notice. `relationship.status=PROVISIONAL_ASSOCIATION_NOT_CAUSAL` prevents presenting the proposed MCM → SMCE path as established causality. MCM and SMCE totals never share dimensions, and every output can be traced to the frozen input/configuration hashes in `score_runs`.

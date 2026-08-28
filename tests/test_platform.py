@@ -25,6 +25,11 @@ class PlatformJourneyTests(unittest.TestCase):
     def setUpClass(cls):
         cls.tempdir = tempfile.TemporaryDirectory()
         config.DB_PATH = Path(cls.tempdir.name) / "test.sqlite3"
+        config.PLATFORM_ADMIN_EMAIL = "platform-admin@example.test"
+        config.PLATFORM_ADMIN_NAME = "مدير اختبار المنصة"
+        config.PLATFORM_ADMIN_PASSWORD = "TestAdminPass2026"
+        config.ALLOW_REGISTRATION = True
+        config.EPHEMERAL_STORAGE = False
         init_db()
         cls.server = ThreadingHTTPServer(("127.0.0.1", 0), API)
         cls.port = cls.server.server_address[1]
@@ -60,13 +65,13 @@ class PlatformJourneyTests(unittest.TestCase):
             return content, content_type
         return json.loads(content or b"{}")
 
-    def login(self, email="sara@example.com", password="ChangeMe-2026"):
+    def login(self, email="platform-admin@example.test", password="TestAdminPass2026"):
         return self.request("POST", "/api/auth/login", {"email": email, "password": password})["token"]
 
     def test_complete_company_journey_and_exports(self):
         token = self.login()
         me = self.request("GET", "/api/me", token=token)
-        self.assertEqual("COMPANY_ADMIN", me["user"]["role"])
+        self.assertEqual("SUPER_ADMIN", me["user"]["role"])
         created = self.request("POST", "/api/assessments", {"assessment_type": "FULL"}, token, 201)
         assessment_id = created["id"]
         detail = self.request("GET", f"/api/assessments/{assessment_id}", token=token)
@@ -78,13 +83,19 @@ class PlatformJourneyTests(unittest.TestCase):
         token = self.login()
         resumed = self.request("GET", f"/api/assessments/{assessment_id}", token=token)
         self.assertEqual(10, len(resumed["responses"]))
-        remaining = [{"item_id": item["id"], "value": 4} for item in resumed["items"]]
+        remaining = [
+            {"item_id": item["id"], "value": 3 if item["construct"] == "SMCE" else 4}
+            for item in resumed["items"]
+        ]
         self.request("POST", f"/api/assessments/{assessment_id}/answers", {"answers": remaining}, token)
         review = self.request("GET", f"/api/assessments/{assessment_id}/review", token=token)
         self.assertTrue(review["complete"])
         results = self.request("POST", f"/api/assessments/{assessment_id}/submit", {}, token)
         self.assertEqual(75.0, results["scores"]["MCM"]["total"])
-        self.assertEqual(75.0, results["scores"]["SMCE"]["total"])
+        self.assertEqual(50.0, results["scores"]["SMCE"]["total"])
+        self.assertEqual("PROACTIVE_ADAPTIVE", results["scores"]["MCM"]["maturity_level"]["code"])
+        self.assertEqual("PROVISIONAL_ASSOCIATION_NOT_CAUSAL", results["relationship"]["status"])
+        self.assertEqual(-25.0, results["relationship"]["efficiency_minus_maturity"])
         self.assertEqual(7, len(results["scores"]["MCM"]["dimensions"]))
         self.assertEqual(5, len(results["scores"]["SMCE"]["dimensions"]))
         roadmap = self.request("GET", f"/api/roadmap/{assessment_id}", token=token)
@@ -92,13 +103,15 @@ class PlatformJourneyTests(unittest.TestCase):
         report = self.request("POST", "/api/reports", {"assessment_id": assessment_id, "report_type": "EXECUTIVE"}, token, 201)
         pdf, content_type = self.request("GET", report["download_url"], token=token, raw=True)
         self.assertTrue(pdf.startswith(b"%PDF-1.4"))
+        self.assertGreater(len(pdf), 5000)
+        self.assertIn(b"Five-stage maturity progression", pdf)
         self.assertIn("application/pdf", content_type)
         benchmark = self.request("GET", f"/api/benchmark/{assessment_id}", token=token)
         self.assertFalse(benchmark["available"])
         self.assertEqual("NON_REAL_ASSESSMENT", benchmark["reason"])
 
-        admin = self.login("admin@nudj.local", "Nudj-Admin-2026!")
-        export = self.request("POST", "/api/research/exports", {"format": "XLSX", "data_origin": "DEMO"}, admin, 201)
+        admin = self.login()
+        export = self.request("POST", "/api/research/exports", {"format": "XLSX", "data_origin": "TEST"}, admin, 201)
         workbook, workbook_type = self.request("GET", export["download_url"], token=admin, raw=True)
         self.assertIn("spreadsheetml", workbook_type)
         with zipfile.ZipFile(BytesIO(workbook)) as archive:
@@ -106,10 +119,19 @@ class PlatformJourneyTests(unittest.TestCase):
             self.assertEqual(10, workbook_xml.count("<sheet "))
             self.assertIn("01_RESPONSES_WIDE", workbook_xml)
             self.assertIn("10_METADATA", workbook_xml)
-        spss = self.request("POST", "/api/research/exports", {"format": "SPSS", "data_origin": "DEMO"}, admin, 201)
+            first_sheet = archive.read("xl/worksheets/sheet1.xml").decode()
+            self.assertIn("FIRM_AGE_YEARS", first_sheet)
+            self.assertIn("EFFICIENCY_MINUS_MATURITY", first_sheet)
+        spss = self.request("POST", "/api/research/exports", {"format": "SPSS", "data_origin": "TEST"}, admin, 201)
         package, _ = self.request("GET", spss["download_url"], token=admin, raw=True)
         with zipfile.ZipFile(BytesIO(package)) as archive:
-            self.assertEqual({"dataset.csv", "codebook.xlsx", "labels.xlsx", "import.sps", "README.txt"}, set(archive.namelist()))
+            self.assertEqual({"dataset.csv", "dataset.xlsx", "codebook.xlsx", "labels.xlsx", "value_labels.xlsx", "import.sps", "README.txt"}, set(archive.namelist()))
+            dataset = archive.read("dataset.csv").decode("utf-8-sig")
+            self.assertIn(",-25.0,", dataset)
+            self.assertNotIn("'-25.0", dataset)
+            syntax = archive.read("import.sps").decode()
+            self.assertIn("F12.2", syntax)
+            self.assertIn("VALUE LABELS", syntax)
 
     def test_registration_rbac_tenant_boundary_and_security(self):
         registered = self.request("POST", "/api/auth/register", {
@@ -132,7 +154,7 @@ class PlatformJourneyTests(unittest.TestCase):
         self.request("GET", "/api/me", token=token, expected=401)
 
     def test_instrument_specification_is_not_misrepresented_as_item_bank(self):
-        admin = self.login("admin@nudj.local", "Nudj-Admin-2026!")
+        admin = self.login()
         document = (Path(__file__).parents[1] / "متطلبات_منصة_نضج_MCM.docx").read_bytes()
         preview = self.request("POST", "/api/instrument-versions/preview", {
             "filename": "متطلبات_منصة_نضج_MCM.docx",
@@ -173,7 +195,7 @@ class PlatformJourneyTests(unittest.TestCase):
         self.request("GET", f"/api/results/{assessment_id}", token=owner)
 
     def test_real_research_data_requires_controller_and_contributor_consent(self):
-        researcher = self.login("admin@nudj.local", "Nudj-Admin-2026!")
+        researcher = self.login()
         baseline = self.request("GET", "/api/research/dataset?data_origin=REAL", token=researcher)["row_count"]
         registered = self.request("POST", "/api/auth/register", {
             "name": "مالك الموافقة", "email": "consent-owner@example.test", "password": "SecurePass2026",
@@ -198,6 +220,41 @@ class PlatformJourneyTests(unittest.TestCase):
         self.assertEqual(50.0, _normalize(3, 1, 5, False))
         self.assertEqual(100.0, _normalize(5, 1, 5, False))
         self.assertEqual(100.0, _normalize(1, 1, 5, True))
+
+    def test_direct_participant_flow_demographics_admin_and_no_sara_demo(self):
+        public_config = self.request("GET", "/api/public-config")
+        self.assertTrue(public_config["direct_participant_enabled"])
+        self.assertNotIn("demo_email", public_config)
+        missing_consent = self.request("POST", "/api/public/assessments", {
+            "organization_name": "منشأة مباشرة", "sector": "التقنية", "firm_size": "SMALL",
+            "firm_age_years": 4, "region": "الرياض", "social_platform_count": 3,
+            "respondent_role": "مدير تسويق", "service_consent": False,
+            "enablers": {"leadership_support": 4, "human_competencies": 3, "technology_infrastructure": 4, "data_readiness": 3},
+        }, expected=422)
+        self.assertEqual("service_consent_required", missing_consent["error"])
+        created = self.request("POST", "/api/public/assessments", {
+            "organization_name": "منشأة مباشرة", "sector": "التقنية", "firm_size": "SMALL",
+            "firm_age_years": 4, "region": "الرياض", "social_platform_count": 3,
+            "respondent_role": "مدير تسويق", "service_consent": True, "research_consent": True,
+            "enablers": {"leadership_support": 4, "human_competencies": 3, "technology_infrastructure": 4, "data_readiness": 3},
+        }, expected=201)
+        participant = self.request("GET", f"/api/participant/session/{created['token']}")
+        self.assertEqual(4, sum(1 for item in participant["responses"].values() if item["value"] is not None))
+        self.assertEqual(4, participant["context"]["firm_age_years"])
+        answers = [{"item_id": item["id"], "value": 4} for item in participant["items"] if item["construct"] != "ENABLER"]
+        self.request("POST", f"/api/participant/session/{created['token']}/answers", {"answers": answers})
+        result = self.request("POST", f"/api/participant/session/{created['token']}/submit", {})
+        self.assertTrue(result["assessment_complete"])
+        self.assertIn(result["scores"]["MCM"]["maturity_level"]["code"], {"REACTIVE", "RESPONSIVE", "MANAGED_INTEGRATED", "PROACTIVE_ADAPTIVE", "INSTITUTIONALISED_INTELLIGENT"})
+        self.assertEqual("MCM_TO_SMCE_PROPOSED_POSITIVE_EFFECT", result["relationship"]["model"])
+        returning = self.request("GET", f"/api/participant/session/{created['token']}")
+        self.assertIsNotNone(returning["result"])
+
+        admin = self.login()
+        users = self.request("GET", "/api/admin/users", token=admin)["users"]
+        self.assertFalse(any(user["name"] == "سارة الحربي" or user["email"].lower() == "sara@example.com" for user in users))
+        organizations = self.request("GET", "/api/organizations", token=admin)["organizations"]
+        self.assertTrue(any(item["name"] == "منشأة مباشرة" for item in organizations))
 
 
 if __name__ == "__main__":
