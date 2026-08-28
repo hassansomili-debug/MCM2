@@ -1,80 +1,50 @@
 # Architecture
 
-## Current state
+## Runtime topology
 
-The application is a static Arabic RTL single-page interface backed by a small Python standard-library HTTP service. The browser renders hash-based views and calls JSON endpoints. The service currently uses SQLite and is exposed locally through `python3 server.py`; Vercel loads `api/index.py` as a Python Function.
-
-Current flow:
+The repository is a zero-dependency Python application. A static Arabic RTL SPA calls a same-origin JSON API served by one `ThreadingHTTPServer` handler. All business rules execute on the server; the client displays returned state and never calculates a scientific score.
 
 ```text
-Browser HTML/CSS/JS
-        |
-        | JSON + Bearer token
-        v
-Python API handler
-        |
-        v
-SQLite (local or ephemeral /tmp on Vercel)
+Browser (index.html + CSS + app.js)
+       |  same-origin JSON / files
+       v
+mcm.api.API
+       +-- identity, tenant guards and RBAC
+       +-- assessment lifecycle
+       +-- deterministic scoring and diagnostics
+       +-- DOCX validation
+       +-- PDF / XLSX / SPSS generation
+       v
+SQLite database on a persistent path
 ```
 
-This is an implementation baseline, not a production architecture. SQLite and seeded credentials must not be used for durable production data.
-
-## Target architecture
-
-```text
-Browser / responsive RTL-LTR client
-        |
-        v
-Vercel frontend and route handlers
-        |
-        +--> Supabase Auth / managed identity
-        |
-        +--> Python scoring and research service
-        |          |
-        |          +--> deterministic scoring engine
-        |          +--> diagnostics and recommendations
-        |          +--> report/export workers
-        |
-        v
-PostgreSQL (Supabase)
-        |
-        +--> organizations and PII boundary
-        +--> immutable instrument versions
-        +--> responses and assessment snapshots
-        +--> scores, diagnostics, roadmap, reports
-        +--> anonymized research views
-```
-
-## Architectural invariants
-
-- MCM and SMCE are separate constructs. `MCM_TOTAL` only aggregates MCM dimensions; `SMCE_TOTAL` only aggregates SMCE dimensions.
-- Questionnaire content and scoring parameters are loaded from an immutable instrument version, never hard-coded in frontend components.
-- Final scores, maturity levels, missing-data handling, diagnostic rules, and priorities execute server-side.
-- AI may narrate deterministic results but cannot create or change scores, maturity, validation status, significance, or research inclusion.
-- Published instrument versions are immutable. A change creates a new version.
-- Company PII is separated from anonymized researcher identifiers and exports.
-- Every organization-scoped query is authorized server-side using membership and role.
-- Real, synthetic, demo, and test data have explicit origins and are never silently mixed.
+`server.py` is the local entry point and `api/index.py` is the legacy Vercel adapter. SQLite is durable only when `MCM_DB_PATH` points to a persistent disk. Vercel `/tmp` is explicitly treated as ephemeral and must not receive real production data.
 
 ## Bounded contexts
 
-1. Identity and organization: users, sessions, organizations, memberships, roles, consents, profile.
-2. Scientific instrument: instruments, versions, dimensions, scales, items, options, lifecycle and import validation.
-3. Assessment: assessment lifecycle, participants, responses, autosave, review, submission and version snapshot.
-4. Scoring and evidence: normalized item scores, dimension scores, MCM/SMCE totals, maturity configuration.
-5. Diagnosis and improvement: rules, gaps, priorities, recommendations, roadmap actions.
-6. Research: anonymized cases, benchmarks, data quality, descriptive statistics and exports.
-7. Reporting and operations: reports, notifications, audit logs, configuration and health.
+1. Identity and organization: users, sessions, memberships, roles, consents, company profile and settings.
+2. Scientific instrument: instruments, immutable versions, dimensions, scales, items, thresholds, rules and recommendations.
+3. Assessment: participants, invitations, autosaved responses, review, submission and reassessment lineage.
+4. Scoring: item normalization, reverse coding, dimension aggregation, separate MCM/SMCE totals and append-only score runs.
+5. Improvement: diagnostics, gaps, priorities, recommendations and 30/90/180-day roadmap.
+6. Research: anonymized cases, consent/origin filters, data quality, descriptive statistics, benchmarks and exports.
+7. Operations: reports, notifications, configuration, audit logs and health.
 
-## Deployment boundary
+## Invariants
 
-The Vercel Function is acceptable for a prototype API but should not own long-running workers or durable local files. Production deployment should use:
+- MCM and SMCE remain separate constructs. `MCM_TOTAL` includes only the seven MCM dimensions; `SMCE_TOTAL` includes only the five SMCE dimensions.
+- Every assessment freezes its `instrument_version_id`; submitted answers and score-run snapshots are append-only.
+- Missing values are not converted to zero. Denominators are based on answered, eligible items.
+- Maturity boundaries, rule thresholds and priority weights are version/configuration data, not browser constants.
+- A published version cannot be changed. Duplicate and archive operations preserve historical assessments.
+- Organization-scoped access is checked on every API request; UI route guards are convenience only.
+- Research rows use `research_id`, omit PII by default, and apply both `data_origin` and research-consent policy.
+- AI, if added later, may narrate deterministic output only; it cannot manufacture scores, validation or statistical significance.
 
-- Vercel for the frontend and short request/response endpoints.
-- Supabase Auth and PostgreSQL for identity and durable data.
-- A separately deployed FastAPI service for scoring, DOCX processing, PDF/export generation, and queued work when execution exceeds Function limits.
-- Environment variables for all URLs, keys, salts, and service credentials.
+## Scientific status
 
-## Phase 1 decision
+The bundled instrument is `PILOT` and visibly labelled Research Beta. It exists to exercise the product workflow. It is not represented as psychometrically validated. A real item bank must pass the documented DOCX import, expert review, pilot and validation process before any version is marked `VALIDATED`.
 
-No later-phase implementation is started by this document. Phase 2 must first establish PostgreSQL migrations, external auth configuration, and a database adapter behind the current API contract.
+## Production evolution
+
+The current single-process architecture is intentionally deployable on a persistent Python host. Higher-volume production should retain the API contract while replacing the storage adapter with PostgreSQL, moving authentication to a managed identity provider, and moving large report/export tasks to a queue. The target DDL is recorded in `migrations/001_postgresql.sql`; application SQL still targets SQLite and must not be pointed at PostgreSQL until an adapter is implemented and parity-tested.

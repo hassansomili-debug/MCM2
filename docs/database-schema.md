@@ -1,70 +1,65 @@
-# Database Schema
+# Database schema
 
-This is the target PostgreSQL schema for Phase 2 onward. The current SQLite schema is a partial prototype and does not yet implement all entities below.
+`mcm/database.py` owns the executable SQLite schema, additive migration for the earlier prototype, seed data and indexes. `PRAGMA foreign_keys=ON`, WAL and a busy timeout are enabled on every connection.
 
-## Identity and organization
+## Identity and tenancy
 
-| Table | Key fields | Purpose |
-| --- | --- | --- |
-| `users` | `id`, `auth_user_id`, `email`, `full_name`, `job_title`, `phone`, `preferred_language` | PII-backed application identity; email should be owned by managed auth where possible. |
-| `organizations` | `id`, `name`, `sector`, `subsector`, `size`, `country`, `region`, `data_origin` | Company tenant and research origin metadata. |
-| `organization_users` | `organization_id`, `user_id`, `role`, `status` | Many-to-many membership and server-side RBAC. |
-| `consents` | `id`, `participant_id`, `consent_type`, `consent_version`, `accepted`, `accepted_at` | Separate service consent from research consent. |
-| `company_profiles` | `organization_id`, onboarding fields, CRM/analytics fields | Company setup and profile data. |
+| Tables | Purpose |
+| --- | --- |
+| `users`, `sessions`, `password_reset_tokens` | PBKDF2 identities, hashed bearer sessions, one-time password reset tokens. |
+| `organizations`, `memberships` | Tenant and many-to-many role membership. |
+| `company_profiles`, `organization_profiles` | Organization onboarding and operational profile. |
+| `consents` | Versioned, separate service and research consent for users or participants. |
+| `user_settings`, `notifications` | Locale/preferences and notification inbox. |
 
-Required roles: `COMPANY_RESPONDENT`, `COMPANY_ADMIN`, `CONSULTANT`, `RESEARCHER`, `SUPER_ADMIN`.
+Roles are `COMPANY_RESPONDENT`, `COMPANY_ADMIN`, `CONSULTANT`, `RESEARCHER`, and `SUPER_ADMIN`.
 
-## Scientific instrument
+## Instrument
 
-| Table | Key fields | Purpose |
-| --- | --- | --- |
-| `instruments` | `id`, `code`, `name`, `status` | Logical instrument identity. |
-| `instrument_versions` | `id`, `instrument_id`, `version`, `status`, `validated_at`, `published_at` | Immutable lifecycle: DRAFT, EXPERT_REVIEW, PILOT, VALIDATED, ARCHIVED. |
-| `dimensions` | `id`, `instrument_version_id`, `code`, `construct_type`, `name_ar`, `name_en`, `weight` | Versioned MCM/SMCE dimensions. |
-| `scales` | `id`, `instrument_version_id`, `code`, `response_type`, `min_value`, `max_value` | Configurable response scales. |
-| `scale_values` | `id`, `scale_id`, `value`, `label_ar`, `label_en`, `missing_type` | Valid values and missing-value semantics. |
-| `items` | `id`, `code`, `source`, `lifecycle_status` | Stable scientific item identity. |
-| `item_versions` | `id`, `item_id`, `instrument_version_id`, `dimension_id`, wording, `reverse_coded`, `required`, `weight`, `response_type` | Item wording and scoring metadata per instrument version. |
-| `item_options` | `id`, `item_version_id`, `value`, labels | Multiple-choice options. |
-| `maturity_levels` | `id`, `instrument_version_id`, `code`, labels, threshold/configuration | Configurable five-level classification; no frontend cutoff constants. |
+| Tables | Purpose |
+| --- | --- |
+| `instruments`, `instrument_versions` | Logical instrument and lifecycle snapshots (`DRAFT`, `EXPERT_REVIEW`, `PILOT`, `VALIDATED`, `ARCHIVED`). |
+| `dimensions` | Versioned MCM, SMCE, ENABLER and OUTCOME dimensions with weights/order. |
+| `scales`, `scale_values` | Response bounds, localized labels and explicit missing semantics. |
+| `items` | Versioned wording, construct, dimension, response type, required flag, weight and reverse-coding flag. |
+| `maturity_levels` | Server-side MCM maturity intervals. |
+| `diagnostic_rules`, `recommendations` | Versioned deterministic evidence library. |
+
+The current SQLite implementation stores the stable item and version-specific wording in one `items` row. PostgreSQL target DDL separates them further only when migration work begins; API consumers use immutable version IDs either way.
 
 ## Assessment and scoring
 
-| Table | Key fields | Purpose |
-| --- | --- | --- |
-| `assessments` | `id`, `organization_id`, `instrument_version_id`, `assessment_type`, `status`, timestamps, `data_origin` | Assessment lifecycle and frozen instrument reference. |
-| `assessment_participants` | `assessment_id`, `participant_id`, `role`, `token_status` | Multi-respondent-ready participant membership. |
-| `participants` | `id`, `research_id`, PII reference, role metadata | Separate PII from anonymized research identifier such as `P000001`. |
-| `responses` | `id`, `assessment_id`, `participant_id`, `item_version_id`, `value`, `missing_type`, timestamps | Raw response storage; never coerce missing to zero. |
-| `assessment_scores` | `assessment_id`, `construct_type`, `total_score`, `maturity_level_id`, method metadata | Separate MCM_TOTAL and SMCE_TOTAL. |
-| `dimension_scores` | `assessment_id`, `dimension_id`, `score`, `answered_count`, method metadata | Server-generated dimension results. |
+| Tables | Purpose |
+| --- | --- |
+| `assessments` | Tenant, version, type, origin, status, timestamps and reassessment parent. |
+| `participants`, `assessment_participants`, `participant_sessions`, `invitations` | Multi-respondent identity boundary and invitation access. |
+| `responses` | Raw numeric/text value or missing type, unique per assessment/participant/item. |
+| `score_runs` | Append-only run number, scoring/configuration snapshot and input/output hashes. |
+| `response_item_scores`, `score_run_dimensions`, `score_run_totals` | Complete trace of the current and previous calculations. |
+| `dimension_scores`, `assessment_scores` | Current materialized results for fast reads. |
 
-## Diagnostics and improvement
+The legacy `answers` and `scores` tables remain only for safe migration of the earlier repository; new writes use `responses` and the explicit score tables.
 
-| Table | Key fields | Purpose |
-| --- | --- | --- |
-| `diagnostic_rules` | `id`, `instrument_version_id`, conditions JSON, severity, confidence, diagnosis type | Database-driven deterministic rules. |
-| `diagnostic_results` | `assessment_id`, `rule_id`, evidence JSON, affected dimensions | Materialized diagnostic output. |
-| `recommendations` | `id`, `dimension_id`, problem, action, KPI, owner, impact, effort, horizon, version, active | Reusable evidence-backed recommendation catalog. |
-| `assessment_recommendations` | `assessment_id`, `recommendation_id`, priority, rationale | Assessment-specific recommendation selection. |
-| `roadmap_items` | `id`, `assessment_id`, recommendation, owner, target date, status, impact, effort, KPI | 30/90/180-day implementation tracking. |
+## Diagnosis, research and operations
 
-## Research and operations
+| Tables | Purpose |
+| --- | --- |
+| `diagnostic_results`, `assessment_recommendations`, `roadmap_items` | Evidence, ranked improvement work and execution status. |
+| `reports`, `research_exports` | Audited generation requests; files are regenerated from authorized database state. |
+| `data_quality_flags` | Straight-line, incomplete and related quality findings. |
+| `audit_logs` | Actor, action, entity and safe JSON metadata. |
+| `system_configuration` | Typed JSON configuration such as minimum benchmark N, gap threshold and priority weights. |
+| `schema_migrations` | Applied baseline version. |
 
-| Table | Key fields | Purpose |
-| --- | --- | --- |
-| `benchmarks` | cohort fields, sample size, scores, generated_at | Privacy-aware benchmark aggregates. |
-| `research_exports` | `id`, actor, filters, origin policy, format, status, file reference | Audited export jobs. |
-| `reports` | `id`, `assessment_id`, type, status, file reference, created_by | Executive and detailed PDFs. |
-| `notifications` | `id`, `user_id`, `type`, title, body, `target_url`, `read_at` | Notification center. |
-| `audit_logs` | `id`, actor, action, entity type/id, metadata, timestamp | Administrative and scientific audit trail. |
-| `system_configuration` | `key`, typed value, version, updated_by | Benchmark minimum N, scoring methods, priority weights, feature flags. |
+## Critical constraints
 
-## Database rules
+- Unique membership per user/organization and response per assessment/participant/item.
+- Unique dimension and item code inside an instrument version.
+- Foreign keys from assessments to frozen instrument versions and from score rows to the assessment/run.
+- Tenant filtering is mandatory in service queries in addition to relational constraints.
+- Research exports default to `REAL`, require research consent for real organizations, omit direct PII, and preserve explicit origin metadata.
+- Submitted assessments are locked; recalculation creates a new score run rather than updating prior evidence.
 
-- Foreign keys enforce organization and instrument-version ownership.
-- Unique constraints prevent duplicate dimension codes within a version and duplicate item codes within an instrument version.
-- Published versions are append-only and cannot be edited in place.
-- Research views expose anonymized IDs and exclude default PII.
-- `data_origin` is required on assessments and research cases and is filtered explicitly on export/benchmark queries.
-- Row-level security or an equivalent service-layer tenant check must protect every organization-scoped table.
+## Backup
+
+Stop writes or use SQLite online backup before copying the database. Back up the database and deployment configuration together, encrypt at rest, verify restoration regularly, and never commit `mcm.sqlite3` or generated export files.
