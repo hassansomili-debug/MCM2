@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import config
 from .ai_plans import generate_improvement_plan
+from .analytics import ALL_COMPLETED, LATEST_PER_ORGANIZATION, analytics_payload
 from .database import (
     CONSULTATION_EVENTS,
     CONSULTATION_STATUSES,
@@ -490,6 +491,28 @@ class API(BaseHTTPRequestHandler):
             return self._reports(method, path, query, data, context)
         if path.startswith("/api/research/"):
             return self._research(method, path, query, data, context)
+        if path == "/api/analytics" and method == "GET":
+            # The analysis centre describes stored scores. A researcher may read
+            # it without organisation names; the platform manager sees them.
+            self.require_roles(context, {"SUPER_ADMIN", "RESEARCHER"})
+            db = connect()
+            try:
+                mode = (query.get("mode") or [LATEST_PER_ORGANIZATION])[0].upper()
+                if mode not in {LATEST_PER_ORGANIZATION, ALL_COMPLETED}:
+                    raise APIError("invalid_unit_of_analysis", 422)
+                origin = (query.get("data_origin") or ["REAL"])[0].upper()
+                if origin not in {"REAL", "TEST", "DEMO", "SYNTHETIC", "ALL"}:
+                    raise APIError("invalid_data_origin", 422)
+                filters = {
+                    key: (query.get(key) or [""])[0]
+                    for key in ("sector", "firm_size", "business_model", "region", "regulated")
+                }
+                return self.send_json(analytics_payload(
+                    db, mode=mode, data_origin=origin, filters=filters,
+                    include_names=context["role"] == "SUPER_ADMIN",
+                ))
+            finally:
+                db.close()
         if path.startswith("/api/admin/consultations"):
             # Handled before the admin dispatcher because a consultant may work
             # the leads assigned to them without holding platform administration.
@@ -1222,7 +1245,10 @@ class API(BaseHTTPRequestHandler):
                     "INSERT INTO organizations(name,locale,sector,size,country,region,data_origin,created_at) VALUES (?,?,?,?,?,?,?,?)",
                     (organization_name, data.get("locale", "ar"), data.get("sector"), data.get("size"), data.get("country"), data.get("region"), "REAL", timestamp),
                 ).lastrowid
-                db.execute("INSERT INTO memberships(user_id,organization_id,role,status) VALUES (?,?,?,?)", (user_id, org_id, "COMPANY_ADMIN", "ACTIVE"))
+                # Self-registration can only ever produce a company account for
+                # the organisation it just created. A platform role is granted
+                # by the platform manager and by nobody else.
+                db.execute("INSERT INTO memberships(user_id,organization_id,role,status) VALUES (?,?,?,?)", (user_id, org_id, config.SELF_REGISTRATION_ROLE, "ACTIVE"))
                 db.execute("INSERT INTO company_profiles(organization_id,completion,updated_at) VALUES (?,?,?)", (org_id, 10, timestamp))
                 db.execute("INSERT INTO user_settings(user_id,locale) VALUES (?,?)", (user_id, data.get("locale", "ar")))
                 if bool(data.get("service_consent", True)):
@@ -1368,8 +1394,10 @@ class API(BaseHTTPRequestHandler):
                 self.require_roles(context, {"COMPANY_ADMIN", "SUPER_ADMIN"})
                 user_id = int(data.get("user_id") or 0)
                 role = _role(data.get("role"))
-                company_roles = {"COMPANY_RESPONDENT", "COMPANY_ADMIN", "CONSULTANT"}
-                if context["role"] != "SUPER_ADMIN" and role not in company_roles:
+                # Platform roles reach every organisation, so only the platform
+                # manager may grant one. A company administrator manages their
+                # own organisation's roles and nothing wider.
+                if context["role"] != "SUPER_ADMIN" and role in config.PLATFORM_ROLES:
                     raise APIError("permission_denied", 403)
                 status = str(data.get("status") or "ACTIVE").upper()
                 if status not in {"ACTIVE", "SUSPENDED"}:
@@ -2484,6 +2512,11 @@ class API(BaseHTTPRequestHandler):
                 org_id = int(data.get("organization_id") or context["organization_id"])
                 if not _valid_email(email) or len(name) < 2 or not _password_ok(password):
                     raise APIError("invalid_user_data", 422)
+                # Reached only by the platform manager, who may create an
+                # assistant in any role. The guard is explicit so the intent
+                # survives any later change to the surrounding dispatcher.
+                if context["role"] != "SUPER_ADMIN":
+                    raise APIError("permission_denied", 403)
                 if db.execute("SELECT 1 FROM users WHERE lower(email)=?", (email,)).fetchone():
                     raise APIError("email_already_exists", 409)
                 if not db.execute("SELECT 1 FROM organizations WHERE id=?", (org_id,)).fetchone():

@@ -207,11 +207,12 @@ async function router() {
   if (researchRoutes.has(route.parts[0]) && !['RESEARCHER','SUPER_ADMIN'].includes(state.me?.user?.role)) return navigate('overview');
   if (route.parts[0] === 'admin' && state.me?.user?.role !== 'SUPER_ADMIN') return navigate('overview');
   if (route.parts[0] === 'consultations' && !['SUPER_ADMIN','CONSULTANT'].includes(state.me?.user?.role)) return navigate('overview');
+  if (route.parts[0] === 'analytics' && !['SUPER_ADMIN','RESEARCHER'].includes(state.me?.user?.role)) return navigate('overview');
   if (route.parts[0] === 'participants' && !canManageAssessments()) return navigate('overview');
-  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',privacy:'سياسة الخصوصية',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون',participant:'دخول المشارك','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة',consultations:'طلبات الاستشارة'};
+  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',privacy:'سياسة الخصوصية',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون',participant:'دخول المشارك','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة',consultations:'طلبات الاستشارة',analytics:'مركز تحليل البيانات'};
   document.querySelector('#page-label').textContent = labels[route.parts[0]] || 'مقياس النضج الاتصالي التسويقي';
   if (route.parts[0] === 'dashboard') return navigate('results/latest');
-  const handlers = {landing:renderLanding,privacy:renderPrivacy,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,participant:renderParticipant,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin,consultations:renderConsultations};
+  const handlers = {landing:renderLanding,privacy:renderPrivacy,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,participant:renderParticipant,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin,consultations:renderConsultations,analytics:renderAnalytics};
   const handler = handlers[route.parts[0]];
   if (!handler) { appView.innerHTML = emptyState('الصفحة غير موجودة', 'تحقق من الرابط أو عد إلى مساحة العمل.', '<a class="primary-button" href="#overview">العودة للرئيسية</a>'); return; }
   try { await handler(route); if (request === state.routeRequest) appView.focus({preventScroll:true}); }
@@ -490,6 +491,7 @@ async function renderPrivacy() {
       <span>جهة طلبات الخصوصية: ${pending(notice.privacy_contact_ar)}</span>
     </div></section>
     ${notice.sections.map(section=>`<section class="panel"><h2>${e(section.title_ar)}</h2><p>${section.body_ar.includes('[[') ? pending(section.body_ar) : e(section.body_ar)}</p></section>`).join('')}
+    <section class="panel"><div class="card-title"><div><h2>سحب موافقة التواصل</h2><p>أدخل رقم الطلب الذي ظهر لك عند الإرسال. يوقف السحب التواصل بشأن الطلب، ولا يؤثر على نتيجة التقييم ولا على إتاحتها.</p></div></div><form id="withdraw-consent-form" class="form-grid"><label class="field"><span>رقم الطلب</span><input name="lead_id" type="number" min="1" required inputmode="numeric"></label><div class="field full"><button class="danger-button" type="submit">سحب الموافقة</button></div><div class="form-error full" hidden></div></form></section>
   </div></main></div>`;
 }
 
@@ -838,6 +840,96 @@ const consultationTopicLabels = {
   CAPABILITY_SUSTAINABILITY:'استدامة القدرات', FULL_90_DAY_PLAN:'خطة 90 يومًا', OTHER:'آخر',
 };
 
+function statCell(stats) {
+  if (!stats || !stats.n) return '<span class="dashboard-empty">لا توجد بيانات</span>';
+  return `<span class="stat-block"><b>${number(stats.mean,1)}</b><small>الوسيط ${number(stats.median,1)} · الانحراف ${stats.sd === null ? '—' : number(stats.sd,2)} · N=${number(stats.n)}</small></span>`;
+}
+
+function correlationCell(result) {
+  if (!result || !result.available) {
+    return `<span class="corr-cell muted">${e(result?.notice_ar || 'غير متاح')} (N=${number(result?.n || 0)})</span>`;
+  }
+  const r = Number(result.pearson_r);
+  const strength = Math.abs(r) >= 0.5 ? 'strong' : Math.abs(r) >= 0.3 ? 'moderate' : 'weak';
+  const ci = result.ci95 ? ` · 95% [${number(result.ci95[0],2)}, ${number(result.ci95[1],2)}]` : '';
+  return `<span class="corr-cell ${strength}"><b dir="ltr">r = ${number(r,3)}</b><small dir="ltr">ρ = ${number(result.spearman_rho,3)}${ci} · N=${number(result.n)}</small></span>`;
+}
+
+// Scatter drawn as inline SVG: the content security policy allows no external
+// script, so no chart library can be loaded here.
+function scatterPlot(points, boundaries) {
+  if (!points.length) return emptyState('لا توجد حالات مكتملة','تظهر الخريطة بعد اكتمال تقييمات تحمل درجتي MCM وSMCE.');
+  const size = 460, pad = 46, span = size - pad * 2;
+  const px = value => pad + (Number(value) / 100) * span;
+  const py = value => size - pad - (Number(value) / 100) * span;
+  const ticks = [0,25,50,75,100];
+  const grid = ticks.map(t => `<line x1="${px(t)}" y1="${pad}" x2="${px(t)}" y2="${size-pad}"></line><line x1="${pad}" y1="${py(t)}" x2="${size-pad}" y2="${py(t)}"></line>`).join('');
+  const labels = ticks.map(t => `<text class="axis" x="${px(t)}" y="${size-pad+16}" text-anchor="middle">${t}</text><text class="axis" x="${pad-8}" y="${py(t)+4}" text-anchor="end">${t}</text>`).join('');
+  const median = (boundaries.mcm_boundary !== null && boundaries.smce_boundary !== null)
+    ? `<line class="median" x1="${px(boundaries.mcm_boundary)}" y1="${pad}" x2="${px(boundaries.mcm_boundary)}" y2="${size-pad}"></line><line class="median" x1="${pad}" y1="${py(boundaries.smce_boundary)}" x2="${size-pad}" y2="${py(boundaries.smce_boundary)}"></line>` : '';
+  const dots = points.map(point => `<circle cx="${px(point.mcm_total)}" cy="${py(point.smce_total)}" r="6"><title>${e(point.organization_name || `منشأة #${point.organization_id}`)} · MCM ${number(point.mcm_total,1)} · SMCE ${number(point.smce_total,1)}</title></circle>`).join('');
+  const described = points.map(point => `${point.organization_name || `منشأة ${point.organization_id}`}: نضج ${number(point.mcm_total,1)}، كفاءة ${number(point.smce_total,1)}`).join('؛ ');
+  return `<div class="scatter-wrap"><svg class="scatter" viewBox="0 0 ${size} ${size}" role="img" aria-label="${e(`خريطة النضج مقابل الكفاءة. ${described}`)}"><g class="scatter-grid">${grid}</g>${median}<g class="scatter-points">${dots}</g><g>${labels}</g><text class="axis-title" x="${size/2}" y="${size-6}" text-anchor="middle">MCM · النضج</text><text class="axis-title" transform="rotate(-90 14 ${size/2})" x="14" y="${size/2}" text-anchor="middle">SMCE · الكفاءة</text></svg></div>`;
+}
+
+async function renderAnalytics(route) {
+  loading('جارٍ تحليل البيانات...');
+  const params = new URLSearchParams();
+  ['mode','data_origin','sector','firm_size','business_model','region'].forEach(key => {
+    const value = route?.query?.get(key); if (value) params.set(key, value);
+  });
+  const data = await api(`/api/analytics${params.toString() ? `?${params}` : ''}`);
+  const current = key => route?.query?.get(key) || '';
+
+  const cards = [
+    ['الحالات المحللة', number(data.n)],
+    ['متوسط النضج MCM', data.summary.mcm.n ? number(data.summary.mcm.mean,1) : '--'],
+    ['متوسط الكفاءة SMCE', data.summary.smce.n ? number(data.summary.smce.mean,1) : '--'],
+    ['الحد الأدنى للمجموعة', number(data.minimum_group_size)],
+  ].map(([label,value]) => `<article class="card metric-card span-3"><small>${e(label)}</small><strong>${value}</strong></article>`).join('');
+
+  const stageRows = data.summary.stage_distribution.map(item =>
+    `<div class="data-table__row"><strong>${e(item.label_ar)}</strong><span>${number(item.n)}</span><span>${data.n ? number(item.n / data.n * 100, 1) : '0'}%</span></div>`);
+
+  const dimensionRows = data.dimensions.map(item =>
+    `<div class="data-table__row"><strong>${e(item.code)}</strong><span>${number(item.mean,1)}</span><span>${number(item.median,1)}</span><span>${item.sd === null ? '—' : number(item.sd,2)}</span><span>${number(item.min,1)} – ${number(item.max,1)}</span><span>${number(item.n)}</span></div>`);
+
+  const associationRows = data.associations.map(item =>
+    `<div class="data-table__row"><strong>${e(item.label_ar)}<small>${e(item.variable)}</small></strong><span>${statCell(item.descriptives)}</span><span>${correlationCell(item.with_mcm)}</span><span>${correlationCell(item.with_smce)}</span></div>`);
+
+  const groupSections = Object.entries(data.groups).map(([variable, block]) => {
+    const rows = block.groups.map(group => group.suppressed
+      ? `<div class="data-table__row"><strong>${e(group.value)}</strong><span>${number(group.n)}</span><span class="suppressed" colspan="2">محجوبة — العينة أقل من ${number(data.minimum_group_size)}</span><span></span></div>`
+      : `<div class="data-table__row"><strong>${e(group.value)}</strong><span>${number(group.n)}</span><span>${statCell(group.mcm)}</span><span>${statCell(group.smce)}</span></div>`);
+    return `<section class="panel"><div class="card-title"><div><h2>${e(block.label_ar)}</h2><p>وصف منفصل لكل من النضج والكفاءة داخل كل فئة.</p></div></div>${rows.length ? table(['الفئة','العدد','MCM','SMCE'],rows,4,760) : emptyState('لا توجد فئات','لم تصل بيانات كافية بعد.')}</section>`;
+  }).join('');
+
+  const q = data.quadrants;
+  const quadrantCards = Object.entries(q.labels_ar).map(([key,label]) =>
+    `<article class="card quadrant-card span-3"><small>${e(label)}</small><strong>${number(q.counts[key] || 0)}</strong><span>منشأة</span></article>`).join('');
+
+  const versionWarning = data.version_warning_ar ? `<div class="research-notice"><strong>تنبيه إصدارات</strong><span>${e(data.version_warning_ar)}</span></div>` : '';
+
+  appView.innerHTML = `<div class="page">${pageHeading('التحليل · مركز البيانات','مركز تحليل البيانات','إحصاءات وصفية وعلاقات بين المتغيرات، محسوبة على الخادم من الدرجات المخزّنة.')}
+    ${versionWarning}
+    <div class="research-notice"><strong>حدود القراءة</strong><span>${e(data.notice_ar)}</span></div>
+    <section class="panel"><div class="card-title"><div><h2>نطاق التحليل</h2></div></div><form id="analytics-filters" class="form-grid">
+      <label class="field"><span>وحدة التحليل</span><select name="mode"><option value="LATEST_PER_ORGANIZATION" ${current('mode') !== 'ALL_COMPLETED' ? 'selected':''}>آخر تقييم لكل منشأة</option><option value="ALL_COMPLETED" ${current('mode') === 'ALL_COMPLETED' ? 'selected':''}>كل التقييمات المكتملة</option></select></label>
+      <label class="field"><span>مصدر البيانات</span><select name="data_origin">${['REAL','TEST','DEMO','ALL'].map(v=>`<option value="${v}" ${(current('data_origin') || 'REAL') === v ? 'selected':''}>${e(v === 'REAL' ? 'واقعي' : v === 'ALL' ? 'الكل' : v)}</option>`).join('')}</select></label>
+      <label class="field"><span>القطاع</span><input name="sector" value="${e(current('sector'))}" placeholder="كل القطاعات"></label>
+      <label class="field"><span>حجم المنشأة</span><select name="firm_size"><option value="">الكل</option>${['MICRO','SMALL','MEDIUM'].map(v=>`<option value="${v}" ${current('firm_size') === v ? 'selected':''}>${e({MICRO:'متناهية الصغر',SMALL:'صغيرة',MEDIUM:'متوسطة'}[v])}</option>`).join('')}</select></label>
+      <div class="field full button-row"><button class="primary-button" type="submit">تطبيق</button><a class="secondary-button" href="#analytics">إعادة الضبط</a></div>
+    </form></section>
+    <div class="card-grid">${cards}</div>
+    <section class="panel"><div class="card-title"><div><h2>خريطة النضج والكفاءة</h2><p>كل نقطة منشأة واحدة. الخطان المتقطعان وسيط العينة، وهما حدّ الأرباع لا عتبة معيارية.</p></div></div>${scatterPlot(data.scatter, q)}<div class="card-grid">${quadrantCards}</div></section>
+    <section class="panel"><div class="card-title"><div><h2>العلاقة بين النضج والكفاءة</h2><p>${e(data.relationship.interpretation_ar)}</p></div></div><div class="correlation-headline">${correlationCell(data.relationship)}</div></section>
+    <section class="panel"><div class="card-title"><div><h2>توزيع المراحل</h2></div></div>${stageRows.length ? table(['المرحلة','العدد','النسبة'],stageRows,3,520) : emptyState('لا توجد حالات مصنفة','')}</section>
+    <section class="panel"><div class="card-title"><div><h2>وصف الأبعاد</h2><p>الأبعاد السبعة للنضج والخمسة للكفاءة والممكنات والنتائج.</p></div></div>${dimensionRows.length ? table(['البعد','المتوسط','الوسيط','الانحراف','المدى','N'],dimensionRows,6,760) : emptyState('لا توجد درجات أبعاد','')}</section>
+    <section class="panel"><div class="card-title"><div><h2>الارتباط بين المتغيرات</h2><p>يُعرض المعامل فقط عند بلوغ ${number(data.minimum_relationship_sample)} حالة. الارتباط وصفي ولا يثبت سببية.</p></div></div>${associationRows.length ? table(['المتغير','وصفه','مع MCM','مع SMCE'],associationRows,4,900) : emptyState('لا توجد متغيرات','')}</section>
+    ${groupSections}
+  </div>`;
+}
+
 async function renderConsultations(route) {
   loading('جارٍ تحميل طلبات الاستشارة...');
   const filters = new URLSearchParams();
@@ -1013,11 +1105,6 @@ document.addEventListener('click', async event => {
     else if (action === 'scroll-maturity') scrollElementIntoView(document.querySelector('#maturity-public'));
     else if (action === 'stage-detail') stageDetailDialog(button.dataset.code);
     else if (action === 'consultation-open') await consultationForm(button.dataset.assessment);
-    else if (action === 'consultation-withdraw') {
-      const participantToken = sessionStorage.getItem('mcm_participant_token') || '';
-      await api(`/api/consultations/${button.dataset.id}/consent`,{method:'POST',body:JSON.stringify({participant_token:participantToken || undefined})});
-      closeDialog(); showToast('سُحبت موافقة التواصل. نتيجتك لم تتأثر.');
-    }
     else if (action === 'consultation-dismiss') {
       // Declining is a UI-only choice. Nothing is sent, nothing is stored, and
       // the result stays exactly as it was.
@@ -1148,6 +1235,23 @@ document.addEventListener('submit', async event => {
       form.insertAdjacentHTML('afterend',`<p class="form-success">تم قبول الطلب. ${dev}</p>`);
     }
     else if (form.id === 'reset-form') { await api('/api/auth/reset-password',{method:'POST',body:JSON.stringify(data)});showToast('تم تحديث كلمة المرور.');navigate('login'); }
+    else if (form.id === 'withdraw-consent-form') {
+      const errorBox = form.querySelector('.form-error');
+      const participantToken = sessionStorage.getItem('mcm_participant_token') || '';
+      errorBox.hidden = true;
+      try {
+        const result = await api(`/api/consultations/${Number(data.lead_id)}/consent`,{method:'POST',body:JSON.stringify({participant_token:participantToken || undefined})});
+        showToast(result.message_ar || 'سُحبت موافقة التواصل.');
+        form.reset();
+      } catch (error) {
+        errorBox.textContent = apiMessage(error); errorBox.hidden = false;
+      }
+    }
+    else if (form.id === 'analytics-filters') {
+      const params = new URLSearchParams();
+      Object.entries(data).forEach(([key, value]) => { if (value) params.set(key, value); });
+      navigate(`analytics?${params.toString()}`);
+    }
     else if (form.id === 'consultation-filters') {
       const params = new URLSearchParams();
       Object.entries(data).forEach(([key, value]) => {
@@ -1195,7 +1299,7 @@ document.addEventListener('submit', async event => {
           idempotency_key:form.dataset.idempotencyKey,
         })});
         const lead = response.lead;
-        openDialog(`<div class="consultation-success"><span class="status-badge">تم الاستلام</span><h2 id="dialog-title">${response.duplicate ? 'طلبك مسجّل بالفعل' : 'تم استلام طلب الاستشارة'}</h2><p>${e(response.confirmation_ar || 'تم استلام طلب الاستشارة، وسيتواصل معك الفريق وفق وسيلة التواصل التي اخترتها.')}</p><div class="pill-list"><span>رقم الطلب: ${number(lead.id)}</span><span>الحالة: ${e(statusLabels[lead.status] || lead.status)}</span></div><p class="consultation-note">يمكنك سحب موافقة التواصل في أي وقت دون أن يؤثر ذلك على نتيجتك.</p><div class="button-row"><button class="secondary-button" data-action="consultation-withdraw" data-id="${lead.id}" type="button">سحب موافقة التواصل</button><button class="primary-button" data-action="close-dialog">إغلاق</button></div></div>`);
+        openDialog(`<div class="consultation-success"><span class="status-badge">تم الاستلام</span><h2 id="dialog-title">${response.duplicate ? 'طلبك مسجّل بالفعل' : 'تم استلام طلب الاستشارة'}</h2><p>${e(response.confirmation_ar || 'تم استلام طلب الاستشارة، وسيتواصل معك الفريق وفق وسيلة التواصل التي اخترتها.')}</p><div class="pill-list"><span>رقم الطلب: ${number(lead.id)}</span><span>الحالة: ${e(statusLabels[lead.status] || lead.status)}</span></div><p class="consultation-note">احتفظ برقم الطلب. يمكنك سحب موافقة التواصل لاحقًا عبر <a href="#privacy">سياسة الخصوصية</a> دون أن يؤثر ذلك على نتيجتك.</p><div class="button-row"><button class="primary-button" data-action="close-dialog">إغلاق</button></div></div>`);
       } catch (error) {
         errorBox.textContent = apiMessage(error); errorBox.hidden = false; submit.disabled = false;
       }

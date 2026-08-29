@@ -108,6 +108,19 @@ ROLE_ALIASES = {
 }
 ROLES = tuple(sorted(set(ROLE_ALIASES.values())))
 
+# Platform roles act across every organisation: they reach the consultation
+# workspace, the research console or platform administration. Only the platform
+# manager may grant them. Company roles are scoped to one organisation and a
+# company administrator may grant those within their own organisation.
+#
+# Participants are deliberately not in either set. A direct participant answers
+# the instrument through a scoped session and never holds an account, so taking
+# the assessment can never become a route to an account of any kind.
+PLATFORM_ROLES = ("SUPER_ADMIN", "CONSULTANT", "RESEARCHER")
+COMPANY_ROLES = ("COMPANY_ADMIN", "COMPANY_RESPONDENT")
+# The single role self-registration may ever produce, when it is enabled at all.
+SELF_REGISTRATION_ROLE = "COMPANY_ADMIN"
+
 def _dimension_tuples(construct: str):
     return [
         (row["code"], row["name_ar"], row["name_en"])

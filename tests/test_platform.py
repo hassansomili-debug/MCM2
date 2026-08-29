@@ -613,6 +613,137 @@ class PlatformJourneyTests(unittest.TestCase):
         self.request("POST", f"/api/participant/session/{token}/submit", {})
         return token, assessment_id
 
+    def test_only_the_platform_manager_grants_platform_roles(self):
+        admin = self.login()
+        self.request("POST", "/api/auth/register", {
+            "name": "مدير شركة", "email": "company-owner@example.test",
+            "password": "CompanyOwner2026", "organization_name": "منشأة الأدوار",
+            "service_consent": True,
+        }, expected=201)
+        owner = self.login("company-owner@example.test", "CompanyOwner2026")
+        # Self-registration produces a company account and nothing wider.
+        self.assertEqual("COMPANY_ADMIN", self.request("GET", "/api/me", token=owner)["user"]["role"])
+
+        self.request("POST", "/api/admin/users", {
+            "name": "عضو", "email": "member@example.test", "password": "MemberPass2026",
+            "role": "COMPANY_RESPONDENT", "organization_id": 1,
+        }, token=admin, expected=201)
+        users = self.request("GET", "/api/admin/users", token=admin)["users"]
+        member_id = next(u["id"] for u in users if u["email"] == "member@example.test")
+
+        # A company administrator may shape their own organisation's roles but
+        # cannot mint a platform role of any kind.
+        for platform_role in ("SUPER_ADMIN", "RESEARCHER", "CONSULTANT"):
+            self.assertEqual("permission_denied", self.request(
+                "POST", "/api/company/team",
+                {"user_id": member_id, "role": platform_role},
+                token=owner, expected=403)["error"])
+        self.request("POST", "/api/company/team",
+                     {"user_id": member_id, "role": "COMPANY_RESPONDENT"}, token=owner)
+
+        # Creating accounts is the platform manager's action alone.
+        self.assertEqual("permission_denied", self.request("POST", "/api/admin/users", {
+            "name": "مساعد", "email": "assistant-probe@example.test",
+            "password": "AssistantPass2026", "role": "CONSULTANT", "organization_id": 1,
+        }, token=owner, expected=403)["error"])
+        # And the manager can add assistants in any role.
+        self.request("POST", "/api/admin/users", {
+            "name": "مساعد المنصة", "email": "assistant@example.test",
+            "password": "AssistantPass2026", "role": "CONSULTANT", "organization_id": 1,
+        }, token=admin, expected=201)
+
+    def test_participants_never_gain_an_account(self):
+        token, assessment_id = self._direct_participant_assessment("منشأة المشارك بلا حساب")
+        from mcm import database
+        with database.transaction() as db:
+            assessment = db.execute("SELECT organization_id FROM assessments WHERE id=?", (assessment_id,)).fetchone()
+            participants = db.execute(
+                "SELECT user_id FROM participants WHERE organization_id=?", (assessment["organization_id"],)
+            ).fetchall()
+            memberships = db.execute(
+                """SELECT m.role,u.email FROM memberships m JOIN users u ON u.id=m.user_id
+                   WHERE m.organization_id=?""",
+                (assessment["organization_id"],),
+            ).fetchall()
+        # Taking the assessment creates a participant with a scoped session and
+        # no user account, so answering can never become a route to one.
+        self.assertTrue(participants)
+        self.assertTrue(all(row["user_id"] is None for row in participants))
+        # The one membership on the new organisation is the platform manager's
+        # oversight, not the participant's.
+        self.assertEqual(
+            [("SUPER_ADMIN", "platform-admin@example.test")],
+            [(row["role"], row["email"]) for row in memberships],
+        )
+        # The participant token reaches the assessment and nothing else.
+        self.request("GET", "/api/me", expected=401)
+        self.request("GET", "/api/admin/users", expected=401)
+
+    def test_analysis_centre_describes_without_combining_constructs(self):
+        admin = self.login()
+        for index in range(3):
+            self._completed_direct_assessment(f"منشأة التحليل {index}")
+
+        payload = self.request("GET", "/api/analytics", token=admin)
+        self.assertEqual("LATEST_PER_ORGANIZATION", payload["unit_of_analysis"])
+        self.assertEqual("REAL", payload["data_origin"])
+        self.assertGreaterEqual(payload["n"], 3)
+        # Both constructs are described, separately, and never merged.
+        self.assertTrue(payload["summary"]["mcm"]["n"])
+        self.assertTrue(payload["summary"]["smce"]["n"])
+        self.assertNotIn("combined", json.dumps(payload))
+        for stats in (payload["summary"]["mcm"], payload["summary"]["smce"]):
+            for field in ("mean", "median", "sd", "min", "max", "p25", "p75"):
+                self.assertIn(field, stats)
+
+        # A correlation below the configured minimum is withheld with a reason
+        # rather than printed from a handful of points.
+        self.assertFalse(payload["relationship"]["available"])
+        self.assertEqual("SAMPLE_BELOW_MINIMUM", payload["relationship"]["reason"])
+        self.assertIn("لا يثبت علاقة سببية", payload["relationship"]["causality_notice_ar"])
+
+        # Groups smaller than the minimum are marked, not silently dropped.
+        sectors = payload["groups"]["sector"]["groups"]
+        self.assertTrue(sectors)
+        self.assertTrue(all(group.get("suppressed") for group in sectors if group["n"] < payload["minimum_group_size"]))
+        self.assertTrue(all("mcm" not in group for group in sectors if group.get("suppressed")))
+
+        # Every context variable is related to each construct independently.
+        variables = {item["variable"] for item in payload["associations"]}
+        self.assertIn("employee_count", variables)
+        for item in payload["associations"]:
+            self.assertIn("with_mcm", item)
+            self.assertIn("with_smce", item)
+
+    def test_analysis_centre_access_and_name_disclosure(self):
+        admin = self.login()
+        self.request("POST", "/api/admin/users", {
+            "name": "باحث التحليل", "email": "analyst@example.test",
+            "password": "AnalystPass2026", "role": "RESEARCHER", "organization_id": 1,
+        }, token=admin, expected=201)
+        researcher = self.login("analyst@example.test", "AnalystPass2026")
+
+        self.request("POST", "/api/auth/register", {
+            "name": "شركة بلا تحليل", "email": "no-analytics@example.test",
+            "password": "NoAnalytics2026", "organization_name": "منشأة بلا تحليل",
+            "service_consent": True,
+        }, expected=201)
+        company = self.login("no-analytics@example.test", "NoAnalytics2026")
+
+        self.assertEqual("permission_denied", self.request(
+            "GET", "/api/analytics", token=company, expected=403)["error"])
+        self.request("GET", "/api/analytics", expected=401)
+
+        # A researcher may read the analysis, but organisation names are the
+        # platform manager's view alone.
+        analyst_view = self.request("GET", "/api/analytics", token=researcher)
+        self.assertTrue(all(point["organization_name"] is None for point in analyst_view["scatter"]))
+        manager_view = self.request("GET", "/api/analytics", token=admin)
+        self.assertTrue(any(point["organization_name"] for point in manager_view["scatter"]))
+
+        self.assertEqual("invalid_unit_of_analysis", self.request(
+            "GET", "/api/analytics?mode=SOMETHING", token=admin, expected=422)["error"])
+
     def test_each_lead_appears_once_with_both_construct_scores(self):
         """A scored assessment must not split its lead into two board rows.
 
