@@ -1519,7 +1519,7 @@ class PostgresAdapterTests(unittest.TestCase):
 
         # The catalogue loads before the client that calls into it.
         self.assertLess(shell.index("i18n.js"), shell.index("app.js"))
-        self.assertIn('id="lang-toggle"', shell)
+        self.assertIn('data-action="toggle-language"', shell)
         # Direction and language follow the choice, not a hardcoded value.
         self.assertIn("document.documentElement.dir = locale() === 'en' ? 'ltr' : 'rtl';", client)
         self.assertNotIn("document.documentElement.lang = 'ar';", client)
@@ -1528,6 +1528,32 @@ class PostgresAdapterTests(unittest.TestCase):
         self.assertIn("function translationCoverage()", catalogue)
         # The client actually calls the translator.
         self.assertGreater(client.count("t('"), 150)
+
+    def test_the_language_toggle_is_reachable_and_direction_follows_it(self):
+        """The toggle must exist where a visitor actually is.
+
+        It lived only in the top bar, which `.is-guest` hides on every public
+        page, so no visitor could reach it. A leftover hardcoded direction also
+        overrode the locale-aware one, leaving English right-to-left.
+        """
+        root = Path(__file__).parents[1]
+        client = (root / "app.js").read_text(encoding="utf-8")
+        shell = (root / "index.html").read_text(encoding="utf-8")
+        css = (root / "platform.css").read_text(encoding="utf-8")
+
+        # Present in the top bar and in the public navigation.
+        self.assertIn('data-action="toggle-language"', shell)
+        self.assertIn("data-action=\"toggle-language\"", client)
+        # Delegated, so a copy rendered later still works.
+        self.assertIn("if (action === 'toggle-language')", client)
+        # The public navigation is hidden nowhere, unlike the top bar.
+        self.assertIn(".is-guest .topbar", css)
+        public_nav = client[client.index("function publicNav()"):]
+        public_nav = public_nav[:public_nav.index("\n}")]
+        self.assertIn("toggle-language", public_nav)
+        # Direction is set once, from the locale, and never overridden after.
+        self.assertNotIn("document.documentElement.dir = 'rtl';", client)
+        self.assertEqual(1, client.count("document.documentElement.dir ="))
 
     def test_client_script_is_syntactically_valid(self):
         """Parse app.js with a real JavaScript engine.

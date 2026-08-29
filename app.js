@@ -179,9 +179,10 @@ function applyShell() {
   appShell.classList.toggle('is-guest', isGuest);
   document.documentElement.lang = locale();
   document.documentElement.dir = locale() === 'en' ? 'ltr' : 'rtl';
-  const langToggle = document.querySelector('#lang-toggle');
-  if (langToggle) langToggle.textContent = locale() === 'en' ? 'ع' : 'EN';
-  document.documentElement.dir = 'rtl';
+  document.querySelectorAll('[data-action="toggle-language"]').forEach(node => {
+    node.textContent = locale() === 'en' ? 'ع' : 'EN';
+    node.setAttribute('aria-label', locale() === 'en' ? 'التبديل إلى العربية' : 'Switch to English');
+  });
   document.querySelectorAll('[data-roles]').forEach(node => {
     const roles = node.dataset.roles.split(',');
     node.hidden = isGuest || !roles.includes(state.me?.user?.role);
@@ -231,7 +232,7 @@ async function router() {
 }
 
 function publicNav() {
-  return `<nav class="public-nav" aria-label="التنقل الرئيسي"><a class="public-brand" href="#landing"><span>ن</span><b>${t('مقياس النضج الاتصالي التسويقي')}</b></a><div><a href="#landing">${t('الرئيسية')}</a><button class="landing-nav-link" data-action="scroll-maturity" type="button">${t('مراحل النضج')}</button><a href="#knowledge">${t('المعرفة')}</a><a href="#join">${t('لدي كود مشاركة')}</a><a href="#privacy">${t('الخصوصية')}</a><a class="secondary-button" href="#login">${t('تسجيل الدخول')}</a><a class="primary-button" href="#participant-start">${t('ابدأ المقياس')}</a></div></nav>`;
+  return `<nav class="public-nav" aria-label="التنقل الرئيسي"><a class="public-brand" href="#landing"><span>ن</span><b>${t('مقياس النضج الاتصالي التسويقي')}</b></a><div><a href="#landing">${t('الرئيسية')}</a><button class="landing-nav-link" data-action="scroll-maturity" type="button">${t('مراحل النضج')}</button><a href="#knowledge">${t('المعرفة')}</a><a href="#join">${t('لدي كود مشاركة')}</a><a href="#privacy">${t('الخصوصية')}</a><button class="lang-toggle" data-action="toggle-language" type="button">EN</button><a class="secondary-button" href="#login">${t('تسجيل الدخول')}</a><a class="primary-button" href="#participant-start">${t('ابدأ المقياس')}</a></div></nav>`;
 }
 
 function scrollElementIntoView(element, block = 'start') {
@@ -1178,19 +1179,18 @@ document.addEventListener('input', event => {
   if (event.target.matches('#assessment-form textarea[data-answer-input]')) queueAnswer(event.target.dataset.itemId,event.target.value || null,event.target.value ? null : 'NOT_ANSWERED');
 });
 
-document.querySelector('#lang-toggle')?.addEventListener('click', () => {
-  // Cached payloads carry server-side wording, so drop them on a switch.
-  setLocale(locale() === 'en' ? 'ar' : 'en');
-  state.maturity = null; state.privacyNotice = null;
-  applyShell(); router();
-});
-
 document.addEventListener('click', async event => {
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const action = button.dataset.action;
   try {
-    if (action === 'auth-mode') { state.authMode = button.dataset.mode; renderAuth(); }
+    if (action === 'toggle-language') {
+      // Cached payloads carry server-side wording, so drop them on a switch.
+      setLocale(locale() === 'en' ? 'ar' : 'en');
+      state.maturity = null; state.privacyNotice = null;
+      applyShell(); return router();
+    }
+    else if (action === 'auth-mode') { state.authMode = button.dataset.mode; renderAuth(); }
     else if (action === 'scroll-model') scrollElementIntoView(document.querySelector('#methodology-public'));
     else if (action === 'scroll-maturity') scrollElementIntoView(document.querySelector('#maturity-public'));
     else if (action === 'stage-detail') stageDetailDialog(button.dataset.code);
