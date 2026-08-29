@@ -490,6 +490,10 @@ class API(BaseHTTPRequestHandler):
             return self._reports(method, path, query, data, context)
         if path.startswith("/api/research/"):
             return self._research(method, path, query, data, context)
+        if path.startswith("/api/admin/consultations"):
+            # Handled before the admin dispatcher because a consultant may work
+            # the leads assigned to them without holding platform administration.
+            return self._consultation_board(method, path, query, data, context)
         if path.startswith("/api/admin"):
             return self._admin(method, path, data, context)
         raise APIError("route_not_found", 404)
@@ -585,10 +589,11 @@ class API(BaseHTTPRequestHandler):
                    VALUES (?,'CREATED','NEW',?,?)""",
                 (lead_id, user_id, timestamp),
             )
-            # Notify the people allowed to act on it. The notification carries
-            # no contact details, only the reference.
+            # Notify only those who can actually open it. Consultants are told
+            # when a lead is assigned to them, not when one is created, so the
+            # notification never points at something they cannot see.
             for row in db.execute(
-                "SELECT DISTINCT user_id FROM memberships WHERE role IN ('SUPER_ADMIN','CONSULTANT')"
+                "SELECT DISTINCT user_id FROM memberships WHERE role='SUPER_ADMIN'"
             ):
                 db.execute(
                     "INSERT INTO notifications(user_id,type,title,body,target_url,created_at) VALUES (?,?,?,?,?,?)",
@@ -611,6 +616,252 @@ class API(BaseHTTPRequestHandler):
                 "duplicate": False,
                 "confirmation_ar": "تم استلام طلب الاستشارة، وسيتواصل معك الفريق وفق وسيلة التواصل التي اخترتها.",
             }, 201)
+        finally:
+            db.close()
+
+    # One row per lead. Joining assessment_scores directly returns a row per
+    # construct, and grouping by the maturity label split each lead into two
+    # groups: an MCM row with the label and an SMCE row with NULL. Aggregating
+    # the scores in a subquery keeps the outer query one-to-one.
+    _LEAD_SCORES_SUBQUERY = """
+        SELECT s.assessment_id,
+               MAX(CASE WHEN s.construct='MCM' THEN s.total_score END) AS mcm_total,
+               MAX(CASE WHEN s.construct='SMCE' THEN s.total_score END) AS smce_total,
+               MAX(CASE WHEN s.construct='MCM' THEN m.label_ar END) AS maturity_label,
+               MAX(CASE WHEN s.construct='MCM' THEN m.level_order END) AS maturity_order
+        FROM assessment_scores s LEFT JOIN maturity_levels m ON m.id=s.maturity_level_id
+        GROUP BY s.assessment_id
+    """
+
+    def _consultation_board(self, method: str, path: str, query: dict, data: dict, context):
+        """The consultation workspace for the platform administrator and consultants.
+
+        A consultant sees and acts on the leads assigned to them and nothing
+        else; the platform administrator sees all of them. Both scopes run
+        through the same SQL so a filter can never widen the caller's view.
+        """
+        self.require_roles(context, {"SUPER_ADMIN", "CONSULTANT"})
+        is_admin = context["role"] == "SUPER_ADMIN"
+        db = connect()
+        try:
+            detail = re.fullmatch(r"/api/admin/consultations/(\d+)", path)
+            action = re.fullmatch(r"/api/admin/consultations/(\d+)/(assign|status|notes)", path)
+
+            def load(lead_id: int):
+                row = db.execute(
+                    "SELECT * FROM consultation_leads WHERE id=? AND deleted_at IS NULL", (lead_id,)
+                ).fetchone()
+                if not row:
+                    raise APIError("consultation_lead_not_found", 404)
+                if not is_admin and (row["assigned_consultant_id"] or 0) != context["id"]:
+                    # Same shape as a missing lead: a consultant must not learn
+                    # that someone else's lead exists.
+                    raise APIError("consultation_lead_not_found", 404)
+                return row
+
+            if method == "GET" and path == "/api/admin/consultations":
+                clauses = ["c.deleted_at IS NULL"]
+                params: list = []
+                if not is_admin:
+                    clauses.append("c.assigned_consultant_id=?")
+                    params.append(context["id"])
+                filters = {
+                    "status": ("c.status=?", lambda value: value.upper()),
+                    "assigned_consultant_id": ("c.assigned_consultant_id=?", int),
+                    "topic": ("c.consultation_topics LIKE ?", lambda value: f'%"{value.upper()}"%'),
+                    "sector": ("o.sector=?", str),
+                    "size": ("o.size=?", lambda value: value.upper()),
+                    "maturity_level": ("sc.maturity_order=?", int),
+                    "created_from": ("c.created_at>=?", int),
+                    "created_to": ("c.created_at<=?", int),
+                }
+                applied = {}
+                for key, (clause, cast) in filters.items():
+                    raw = (query.get(key) or [""])[0]
+                    if not raw:
+                        continue
+                    try:
+                        params.append(cast(raw))
+                    except (TypeError, ValueError):
+                        raise APIError("invalid_filter", 422, {"filter": key})
+                    clauses.append(clause)
+                    applied[key] = raw
+                rows = db.execute(
+                    f"""SELECT c.*,o.name AS organization_display,o.sector,o.size,
+                               u.name AS consultant_name,
+                               sc.mcm_total,sc.smce_total,sc.maturity_label,sc.maturity_order
+                        FROM consultation_leads c
+                        LEFT JOIN organizations o ON o.id=c.organization_id
+                        LEFT JOIN users u ON u.id=c.assigned_consultant_id
+                        LEFT JOIN ({self._LEAD_SCORES_SUBQUERY}) sc ON sc.assessment_id=c.assessment_id
+                        WHERE {' AND '.join(clauses)}
+                        ORDER BY c.created_at DESC""",
+                    tuple(params),
+                ).fetchall()
+                leads = []
+                for row in rows:
+                    payload = self._consultation_payload(row, include_contact=True)
+                    payload.update({
+                        "organization_display": row["organization_display"],
+                        "sector": row["sector"],
+                        "size": row["size"],
+                        "consultant_name": row["consultant_name"],
+                        "mcm_total": row["mcm_total"],
+                        "smce_total": row["smce_total"],
+                        "maturity_label": row["maturity_label"],
+                    })
+                    leads.append(payload)
+                counts = {status: 0 for status in CONSULTATION_STATUSES}
+                for lead in leads:
+                    counts[lead["status"]] = counts.get(lead["status"], 0) + 1
+                consultants = [
+                    {"id": row["id"], "name": row["name"]}
+                    for row in db.execute(
+                        """SELECT DISTINCT u.id,u.name FROM users u JOIN memberships m ON m.user_id=u.id
+                           WHERE m.role IN ('CONSULTANT','SUPER_ADMIN') AND u.is_active=1 ORDER BY u.name"""
+                    )
+                ] if is_admin else []
+                return self.send_json({
+                    "leads": leads,
+                    "counts": counts,
+                    "unassigned": sum(1 for lead in leads if not lead["assigned_consultant_id"]),
+                    "statuses": list(CONSULTATION_STATUSES),
+                    "topics": list(CONSULTATION_TOPICS),
+                    "consultants": consultants,
+                    "scope": "ALL" if is_admin else "ASSIGNED_TO_ME",
+                    "filters": applied,
+                })
+
+            if detail and method == "GET":
+                row = load(int(detail.group(1)))
+                events = [dict(item) for item in db.execute(
+                    """SELECT event_type,previous_status,new_status,note,created_at
+                       FROM consultation_lead_events WHERE consultation_lead_id=? ORDER BY id""",
+                    (row["id"],),
+                )]
+                return self.send_json({
+                    "lead": self._consultation_payload(row, include_contact=True),
+                    "events": events,
+                })
+
+            if detail and method == "DELETE":
+                # Fulfilling a deletion request: the contact details are erased
+                # and the row is tombstoned, so the audit trail survives without
+                # the personal data it describes.
+                self.require_roles(context, {"SUPER_ADMIN"})
+                row = load(int(detail.group(1)))
+                timestamp = now()
+                db.execute(
+                    """UPDATE consultation_leads
+                       SET full_name='[محذوف]',email='',phone_e164='',organization_name=NULL,
+                           job_title=NULL,notes=NULL,consent_to_contact=0,marketing_consent=0,
+                           marketing_consent_at=NULL,status='DO_NOT_CONTACT',
+                           deleted_at=?,updated_at=?
+                       WHERE id=?""",
+                    (timestamp, timestamp, row["id"]),
+                )
+                db.execute(
+                    """INSERT INTO consultation_lead_events(consultation_lead_id,event_type,previous_status,new_status,note,actor_user_id,created_at)
+                       VALUES (?,'DELETION_REQUESTED',?,'DO_NOT_CONTACT','contact data erased',?,?)""",
+                    (row["id"], row["status"], context["id"], timestamp),
+                )
+                audit(db, context["id"], "consultation_contact_erased", "consultation_lead", row["id"], {
+                    "previous_status": row["status"], "contact_data_erased": True,
+                })
+                db.commit()
+                return self.send_json({"deleted": True, "id": row["id"]})
+
+            if action and method == "POST":
+                lead_id, verb = int(action.group(1)), action.group(2)
+                row = load(lead_id)
+                timestamp = now()
+                note = str(data.get("note") or "").strip()[:2000] or None
+
+                if verb == "assign":
+                    self.require_roles(context, {"SUPER_ADMIN"})
+                    consultant_id = int(data.get("consultant_id") or 0)
+                    eligible = db.execute(
+                        """SELECT u.id,u.name FROM users u JOIN memberships m ON m.user_id=u.id
+                           WHERE u.id=? AND u.is_active=1 AND m.role IN ('CONSULTANT','SUPER_ADMIN') LIMIT 1""",
+                        (consultant_id,),
+                    ).fetchone()
+                    if not eligible:
+                        raise APIError("consultant_not_eligible", 422)
+                    new_status = "ASSIGNED" if row["status"] == "NEW" else row["status"]
+                    db.execute(
+                        "UPDATE consultation_leads SET assigned_consultant_id=?,status=?,updated_at=? WHERE id=?",
+                        (consultant_id, new_status, timestamp, lead_id),
+                    )
+                    db.execute(
+                        """INSERT INTO consultation_lead_events(consultation_lead_id,event_type,previous_status,new_status,note,actor_user_id,created_at)
+                           VALUES (?,'ASSIGNED',?,?,?,?,?)""",
+                        (lead_id, row["status"], new_status, note, context["id"], timestamp),
+                    )
+                    # The assigned consultant is told only now, when they can
+                    # actually open the lead.
+                    db.execute(
+                        "INSERT INTO notifications(user_id,type,title,body,target_url,created_at) VALUES (?,?,?,?,?,?)",
+                        (consultant_id, "CONSULTATION_LEAD", "أُسند إليك طلب استشارة",
+                         f"طلب استشارة #{lead_id} بانتظار تواصلك.", "#consultations", timestamp),
+                    )
+                    audit(db, context["id"], "consultation_assigned", "consultation_lead", lead_id, {
+                        "consultant_id": consultant_id, "new_status": new_status,
+                    })
+                    db.commit()
+                    return self.send_json({"id": lead_id, "assigned_consultant_id": consultant_id, "status": new_status})
+
+                if verb == "notes":
+                    if not note:
+                        raise APIError("note_required", 422)
+                    db.execute("UPDATE consultation_leads SET updated_at=? WHERE id=?", (timestamp, lead_id))
+                    db.execute(
+                        """INSERT INTO consultation_lead_events(consultation_lead_id,event_type,previous_status,new_status,note,actor_user_id,created_at)
+                           VALUES (?,'CONTACT_ATTEMPTED',?,?,?,?,?)""",
+                        (lead_id, row["status"], row["status"], note, context["id"], timestamp),
+                    )
+                    audit(db, context["id"], "consultation_note_added", "consultation_lead", lead_id, {})
+                    db.commit()
+                    return self.send_json({"id": lead_id, "note_added": True})
+
+                target = str(data.get("status") or "").strip().upper()
+                if target not in CONSULTATION_STATUSES:
+                    raise APIError("unsupported_consultation_status", 422)
+                if row["consent_to_contact"] == 0 and target not in {"DO_NOT_CONTACT", "CLOSED"}:
+                    # Consent was withdrawn; the only permitted transitions are
+                    # the ones that stop contact.
+                    raise APIError("contact_consent_withdrawn", 409)
+                event = {
+                    "CONTACTED": "CONTACTED", "QUALIFIED": "QUALIFIED",
+                    "CONSULTATION_SCHEDULED": "SCHEDULED", "CONVERTED": "CONVERTED",
+                    "CLOSED": "CLOSED", "DO_NOT_CONTACT": "CLOSED",
+                    "ASSIGNED": "ASSIGNED", "NEW": "CREATED",
+                }[target]
+                updates = ["status=?", "updated_at=?"]
+                params = [target, timestamp]
+                if target == "CONTACTED" and not row["first_contacted_at"]:
+                    updates.append("first_contacted_at=?")
+                    params.append(timestamp)
+                if target == "CONSULTATION_SCHEDULED":
+                    scheduled = data.get("scheduled_at")
+                    updates.append("scheduled_at=?")
+                    params.append(int(scheduled) if scheduled else timestamp)
+                if target in {"CLOSED", "DO_NOT_CONTACT"}:
+                    updates.extend(["closed_at=?", "closure_reason=?"])
+                    params.extend([timestamp, str(data.get("closure_reason") or "").strip()[:400] or None])
+                params.append(lead_id)
+                db.execute(f"UPDATE consultation_leads SET {','.join(updates)} WHERE id=?", tuple(params))
+                db.execute(
+                    """INSERT INTO consultation_lead_events(consultation_lead_id,event_type,previous_status,new_status,note,actor_user_id,created_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (lead_id, event, row["status"], target, note, context["id"], timestamp),
+                )
+                audit(db, context["id"], "consultation_status_changed", "consultation_lead", lead_id, {
+                    "previous_status": row["status"], "new_status": target,
+                })
+                db.commit()
+                return self.send_json({"id": lead_id, "status": target})
+
+            raise APIError("route_not_found", 404)
         finally:
             db.close()
 
@@ -743,7 +994,11 @@ class API(BaseHTTPRequestHandler):
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
-        if include_contact:
+        payload["consent_to_contact"] = bool(row["consent_to_contact"])
+        # Withdrawn consent removes the basis for using these details, so they
+        # stop being served even to a reader who is otherwise entitled to them.
+        # The lead stays visible so the team can see it must not be contacted.
+        if include_contact and row["consent_to_contact"]:
             payload.update({
                 "full_name": row["full_name"],
                 "organization_name": row["organization_name"],
@@ -752,6 +1007,8 @@ class API(BaseHTTPRequestHandler):
                 "phone_e164": row["phone_e164"],
                 "notes": row["notes"],
             })
+        elif include_contact:
+            payload["contact_withheld_reason"] = "CONTACT_CONSENT_WITHDRAWN"
         return payload
 
     def _public_maturity_levels(self) -> dict:
@@ -2184,43 +2441,6 @@ class API(BaseHTTPRequestHandler):
         self.require_roles(context, {"SUPER_ADMIN"})
         db = connect()
         try:
-            if path == "/api/admin/consultations" and method == "GET":
-                rows = db.execute(
-                    """SELECT c.*,o.name AS organization_display,u.name AS consultant_name,
-                              MAX(CASE WHEN s.construct='MCM' THEN s.total_score END) AS mcm_total,
-                              MAX(CASE WHEN s.construct='SMCE' THEN s.total_score END) AS smce_total,
-                              m.label_ar AS maturity_label
-                       FROM consultation_leads c
-                       LEFT JOIN organizations o ON o.id=c.organization_id
-                       LEFT JOIN users u ON u.id=c.assigned_consultant_id
-                       LEFT JOIN assessment_scores s ON s.assessment_id=c.assessment_id
-                       LEFT JOIN maturity_levels m ON m.id=s.maturity_level_id
-                       WHERE c.deleted_at IS NULL
-                       GROUP BY c.id,o.name,u.name,m.label_ar
-                       ORDER BY c.created_at DESC"""
-                ).fetchall()
-                leads = []
-                for row in rows:
-                    # Scores are read from the linked assessment, never copied
-                    # into a free-text field on the lead.
-                    payload = self._consultation_payload(row, include_contact=True)
-                    payload.update({
-                        "organization_display": row["organization_display"],
-                        "consultant_name": row["consultant_name"],
-                        "mcm_total": row["mcm_total"],
-                        "smce_total": row["smce_total"],
-                        "maturity_label": row["maturity_label"],
-                    })
-                    leads.append(payload)
-                counts = {status: 0 for status in CONSULTATION_STATUSES}
-                for lead in leads:
-                    counts[lead["status"]] = counts.get(lead["status"], 0) + 1
-                return self.send_json({
-                    "leads": leads,
-                    "counts": counts,
-                    "unassigned": sum(1 for lead in leads if not lead["assigned_consultant_id"]),
-                    "statuses": list(CONSULTATION_STATUSES),
-                })
             if path == "/api/admin" and method == "GET":
                 return self.send_json({
                     "organizations": db.execute("SELECT COUNT(*) FROM organizations").fetchone()[0],

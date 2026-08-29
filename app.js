@@ -49,6 +49,11 @@ const errorLabels = {
   business_model_required: 'اختر نموذج أعمال المنشأة.', regulated_sector_required: 'حدد ما إذا كان القطاع منظمًا رقابيًا.',
   platform_not_ready: 'المنصة قيد التهيئة؛ حاول بعد قليل.', durable_storage_required: 'التقييم المباشر متوقف مؤقتًا حتى يتم ربط قاعدة بيانات دائمة. تواصل مع مسؤول المنصة.',
   contact_consent_required: 'يلزم إقرار موافقة التواصل لإرسال الطلب.',
+  contact_consent_withdrawn: 'سُحبت موافقة التواصل؛ لا يمكن إلا الإغلاق أو الإيقاف.',
+  consultant_not_eligible: 'المستشار غير مؤهل أو غير نشط.',
+  unsupported_consultation_status: 'حالة غير مدعومة.',
+  note_required: 'أدخل نص الملاحظة.',
+  invalid_filter: 'قيمة فلتر غير صالحة.',
   invalid_phone_number: 'تحقق من رقم الجوال؛ استخدم صيغة مثل 05xxxxxxxx أو +9665xxxxxxxx.',
   full_name_required: 'أدخل الاسم الكامل.',
   unsupported_contact_method: 'وسيلة التواصل المختارة غير مدعومة.',
@@ -200,7 +205,8 @@ async function router() {
     catch { applyShell(); if (!publicRoutes.has(route.parts[0])) return navigate('login'); }
   }
   if (researchRoutes.has(route.parts[0]) && !['RESEARCHER','SUPER_ADMIN'].includes(state.me?.user?.role)) return navigate('overview');
-  if (['admin','consultations'].includes(route.parts[0]) && state.me?.user?.role !== 'SUPER_ADMIN') return navigate('overview');
+  if (route.parts[0] === 'admin' && state.me?.user?.role !== 'SUPER_ADMIN') return navigate('overview');
+  if (route.parts[0] === 'consultations' && !['SUPER_ADMIN','CONSULTANT'].includes(state.me?.user?.role)) return navigate('overview');
   if (route.parts[0] === 'participants' && !canManageAssessments()) return navigate('overview');
   const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',privacy:'سياسة الخصوصية',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون',participant:'دخول المشارك','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة',consultations:'طلبات الاستشارة'};
   document.querySelector('#page-label').textContent = labels[route.parts[0]] || 'مقياس النضج الاتصالي التسويقي';
@@ -825,27 +831,57 @@ function renderExports() {
   appView.innerHTML = `<div class="page">${pageHeading('البحث · التصدير','Excel وSPSS جاهزان للتحليل','صف واحد لكل ملاحظة، أسماء متغيرات ASCII، قيم رقمية صحيحة، وترميزات وقاموس متغيرات منفصل—دون معرّفات شخصية مباشرة.')}<div class="card-grid"><section class="panel span-7"><form id="export-form" class="form-grid"><label class="field"><span>مصدر البيانات</span><select name="data_origin"><option value="REAL">واقعية بموافقة بحثية</option><option value="SYNTHETIC">اصطناعية فقط</option><option value="DEMO_TEST">Demo / Test</option><option value="ALL">كل المصادر - مراجعة خاصة</option></select></label><label class="field"><span>نوع التصدير</span><select name="format"><option value="XLSX">Excel متوافق مع SPSS</option><option value="SPSS">حزمة SPSS: XLSX + CSV + Syntax</option><option value="CSV">CSV UTF-8</option><option value="CODEBOOK">قاموس المتغيرات Excel</option><option value="INSTRUMENT">Instrument JSON</option></select></label><label class="checkbox-field full"><input type="checkbox" required><span>أفهم أن التصدير مسجّل في سجل التدقيق وأن البيانات الواقعية تتطلب موافقة بحثية.</span></label><button class="primary-button full">إنشاء وتنزيل الملف</button></form></section><aside class="card span-5 export-summary"><h2>تشمل المتغيرات</h2><ul><li>خصائص المنشأة: القطاع والحجم والعمر والمنطقة.</li><li>عدد المنصات ودور المجيب والممكنات الأربعة.</li><li>بنود ليكرت ودرجات الأبعاد MCM وSMCE.</li><li>المرحلة الخماسية وفارق الكفاءة عن النضج.</li></ul></aside></div><section class="card"><h2>محتويات مصنف Excel</h2><div class="pill-list">${['01_RESPONSES_WIDE','02_RESPONSES_LONG','03_MCM_SCORES','04_SMCE_SCORES','05_COMPANY_PROFILE','06_CODEBOOK','07_VARIABLE_LABELS','08_VALUE_LABELS','09_INSTRUMENT','10_METADATA'].map(item => `<span>${item}</span>`).join('')}</div></section></div>`;
 }
 
-async function renderConsultations() {
+const consultationTopicLabels = {
+  STRATEGY_AND_GOVERNANCE:'الاستراتيجية والحوكمة', STAKEHOLDER_COMMUNICATION:'أصحاب المصلحة',
+  INFORMATION_GOVERNANCE:'حوكمة المعلومات', CUSTOMER_JOURNEY:'رحلة العميل',
+  PROMISE_EXPERIENCE_ALIGNMENT:'الوعد والتجربة', MEASUREMENT_AND_LEARNING:'القياس والتعلم',
+  CAPABILITY_SUSTAINABILITY:'استدامة القدرات', FULL_90_DAY_PLAN:'خطة 90 يومًا', OTHER:'آخر',
+};
+
+async function renderConsultations(route) {
   loading('جارٍ تحميل طلبات الاستشارة...');
-  const data = await api('/api/admin/consultations');
+  const filters = new URLSearchParams();
+  ['status','assigned_consultant_id','topic','created_from','created_to'].forEach(key => {
+    const value = route?.query?.get(key); if (value) filters.set(key, value);
+  });
+  const suffix = filters.toString() ? `?${filters.toString()}` : '';
+  const data = await api(`/api/admin/consultations${suffix}`);
   const cards = [
     ['طلبات جديدة', data.counts.NEW || 0],
     ['غير مسندة', data.unassigned || 0],
     ['تم التواصل', data.counts.CONTACTED || 0],
     ['جلسات مجدولة', data.counts.CONSULTATION_SCHEDULED || 0],
   ].map(([label, value]) => `<article class="card metric-card span-3"><small>${e(label)}</small><strong>${number(value)}</strong></article>`).join('');
-  const rows = data.leads.map(lead => `<div class="data-table__row">
-    <strong>#${number(lead.id)}<small>${e(lead.full_name || '')}</small></strong>
-    <span>${e(lead.organization_display || lead.organization_name || '--')}</span>
-    <span>${lead.mcm_total === null || lead.mcm_total === undefined ? '--' : `${number(lead.mcm_total,1)}<small>${e(lead.maturity_label || '')}</small>`}</span>
-    <span>${lead.smce_total === null || lead.smce_total === undefined ? '--' : number(lead.smce_total,1)}</span>
-    <span>${(lead.consultation_topics || []).length ? e((lead.consultation_topics || []).join('، ')) : '--'}</span>
-    <span>${badge(lead.status, lead.status === 'DO_NOT_CONTACT' ? 'danger' : lead.status === 'NEW' ? 'warning' : '')}</span>
-    <span>${e(lead.consultant_name || 'غير مسند')}</span>
-    <span>${dateText(lead.created_at)}</span>
-    <span class="button-row"><a class="secondary-button" href="#results/${lead.assessment_id}">النتيجة</a></span>
-  </div>`);
-  appView.innerHTML = `<div class="page">${pageHeading('إدارة المنصة · الاستشارات','طلبات الاستشارة','بيانات التواصل تُعرض لمن يملك صلاحية معلنة فقط، ولا تدخل في أي تصدير بحثي.')}<div class="card-grid">${cards}</div><section class="panel">${rows.length ? table(['الطلب','المنشأة','MCM','SMCE','المحاور','الحالة','المستشار','التاريخ',''],rows,9,1180) : emptyState('لا توجد طلبات استشارة','تظهر الطلبات هنا فور إرسالها من صفحة النتائج.')}</section></div>`;
+  const isAdmin = data.scope === 'ALL';
+  const rows = data.leads.map(lead => {
+    const withheld = lead.contact_withheld_reason === 'CONTACT_CONSENT_WITHDRAWN';
+    const contact = withheld
+      ? '<span class="contact-withheld">سُحبت موافقة التواصل — البيانات محجوبة</span>'
+      : `<a href="mailto:${e(lead.email || '')}">${e(lead.email || '--')}</a><small dir="ltr">${e(lead.phone_e164 || '')}</small>`;
+    const actions = withheld ? '' : `<button class="secondary-button" data-action="consultation-status" data-id="${lead.id}" data-current="${e(lead.status)}">الحالة</button><button class="secondary-button" data-action="consultation-note" data-id="${lead.id}">ملاحظة</button>${isAdmin ? `<button class="secondary-button" data-action="consultation-assign" data-id="${lead.id}" data-current="${lead.assigned_consultant_id || ''}">إسناد</button>` : ''}`;
+    return `<div class="data-table__row">
+      <strong>#${number(lead.id)}<small>${e(withheld ? '—' : (lead.full_name || ''))}</small></strong>
+      <span>${e(lead.organization_display || '--')}</span>
+      <span class="lead-contact">${contact}</span>
+      <span>${lead.mcm_total === null || lead.mcm_total === undefined ? '--' : `${number(lead.mcm_total,1)}<small>${e(lead.maturity_label || '')}</small>`}</span>
+      <span>${lead.smce_total === null || lead.smce_total === undefined ? '--' : number(lead.smce_total,1)}</span>
+      <span>${(lead.consultation_topics || []).map(topic=>e(consultationTopicLabels[topic] || topic)).join('، ') || '--'}</span>
+      <span>${badge(lead.status, lead.status === 'DO_NOT_CONTACT' ? 'danger' : lead.status === 'NEW' ? 'warning' : '')}</span>
+      <span>${e(lead.consultant_name || 'غير مسند')}</span>
+      <span>${dateText(lead.created_at)}</span>
+      <span class="button-row"><a class="secondary-button" href="#results/${lead.assessment_id}">النتيجة</a>${actions}${isAdmin ? `<button class="danger-button" data-action="consultation-erase" data-id="${lead.id}">حذف البيانات</button>` : ''}</span>
+    </div>`;
+  });
+  const current = key => route?.query?.get(key) || '';
+  const filterBar = `<form id="consultation-filters" class="form-grid">
+    <label class="field"><span>الحالة</span><select name="status"><option value="">الكل</option>${data.statuses.map(value=>`<option value="${value}" ${current('status') === value ? 'selected':''}>${e(statusLabels[value] || value)}</option>`).join('')}</select></label>
+    <label class="field"><span>المحور</span><select name="topic"><option value="">الكل</option>${(data.topics || []).map(value=>`<option value="${value}" ${current('topic') === value ? 'selected':''}>${e(consultationTopicLabels[value] || value)}</option>`).join('')}</select></label>
+    ${isAdmin ? `<label class="field"><span>المستشار</span><select name="assigned_consultant_id"><option value="">الكل</option>${(data.consultants || []).map(item=>`<option value="${item.id}" ${current('assigned_consultant_id') === String(item.id) ? 'selected':''}>${e(item.name)}</option>`).join('')}</select></label>` : ''}
+    <label class="field"><span>من تاريخ</span><input name="created_from" type="date" value="${e(current('created_from_date'))}"></label>
+    <div class="field full button-row"><button class="primary-button" type="submit">تطبيق الفلاتر</button><a class="secondary-button" href="#consultations">مسح</a></div>
+  </form>`;
+  const scopeNotice = isAdmin ? '' : '<div class="research-notice"><strong>نطاقك</strong><span>تُعرض الطلبات المسندة إليك فقط.</span></div>';
+  appView.innerHTML = `<div class="page">${pageHeading(isAdmin ? 'إدارة المنصة · الاستشارات' : 'مساحة العمل · الاستشارات','طلبات الاستشارة','بيانات التواصل تُعرض لمن يملك صلاحية معلنة فقط، وتُحجب فور سحب الموافقة، ولا تدخل في أي تصدير بحثي.')}${scopeNotice}<div class="card-grid">${cards}</div><section class="panel"><div class="card-title"><div><h2>تصفية</h2></div></div>${filterBar}</section><section class="panel">${rows.length ? table(['الطلب','المنشأة','التواصل','MCM','SMCE','المحاور','الحالة','المستشار','التاريخ',''],rows,10,1520) : emptyState('لا توجد طلبات مطابقة','عدّل الفلاتر أو انتظر وصول طلب جديد من صفحة النتائج.')}</section></div>`;
 }
 
 async function renderAdmin() {
@@ -1056,6 +1092,25 @@ document.addEventListener('click', async event => {
       const result = await api(`/api/assessments/${button.dataset.id}`,{method:'DELETE'});
       closeDialog(); showToast(`حُذف التقييم #${result.assessment_id} وسُجّل في التدقيق.`); router();
     }
+    else if (action === 'consultation-status') {
+      const statuses = ['NEW','ASSIGNED','CONTACTED','QUALIFIED','CONSULTATION_SCHEDULED','CONVERTED','CLOSED','DO_NOT_CONTACT'];
+      openDialog(`<h2 id="dialog-title">تحديث حالة الطلب #${e(button.dataset.id)}</h2><form id="consultation-status-form" class="form-grid"><input type="hidden" name="lead_id" value="${e(button.dataset.id)}"><label class="field full"><span>الحالة</span><select name="status" required>${statuses.map(value=>`<option value="${value}" ${button.dataset.current === value ? 'selected':''}>${e(statusLabels[value] || value)}</option>`).join('')}</select></label><label class="field full"><span>ملاحظة داخلية</span><textarea name="note" rows="2" maxlength="2000"></textarea></label><label class="field full"><span>سبب الإغلاق (عند الإغلاق أو الإيقاف)</span><input name="closure_reason" maxlength="400"></label><div class="form-error full" hidden></div><button class="primary-button full" type="submit">حفظ الحالة</button></form>`);
+    }
+    else if (action === 'consultation-note') {
+      openDialog(`<h2 id="dialog-title">ملاحظة داخلية على الطلب #${e(button.dataset.id)}</h2><p>تُسجَّل الملاحظة في سجل الطلب باسمك ولا تظهر للمشارك.</p><form id="consultation-note-form" class="form-grid"><input type="hidden" name="lead_id" value="${e(button.dataset.id)}"><label class="field full"><span>الملاحظة</span><textarea name="note" rows="3" required maxlength="2000"></textarea></label><div class="form-error full" hidden></div><button class="primary-button full" type="submit">إضافة</button></form>`);
+    }
+    else if (action === 'consultation-assign') {
+      const board = await api('/api/admin/consultations');
+      openDialog(`<h2 id="dialog-title">إسناد الطلب #${e(button.dataset.id)}</h2><form id="consultation-assign-form" class="form-grid"><input type="hidden" name="lead_id" value="${e(button.dataset.id)}"><label class="field full"><span>المستشار</span><select name="consultant_id" required>${(board.consultants || []).map(item=>`<option value="${item.id}" ${String(button.dataset.current) === String(item.id) ? 'selected':''}>${e(item.name)}</option>`).join('')}</select></label><label class="field full"><span>ملاحظة</span><input name="note" maxlength="400"></label><div class="form-error full" hidden></div><button class="primary-button full" type="submit">إسناد</button></form>`);
+    }
+    else if (action === 'consultation-erase') {
+      openDialog(`<h2 id="dialog-title">حذف بيانات التواصل</h2><p class="classification-boundary">يُنفَّذ طلب الحذف: تُمحى بيانات التواصل نهائيًا ويبقى سجل الطلب لأغراض التدقيق دون البيانات الشخصية. لا يمكن التراجع.</p><div class="button-row"><button class="danger-button" data-action="confirm-consultation-erase" data-id="${e(button.dataset.id)}" type="button">تأكيد الحذف</button><button class="secondary-button" data-action="close-dialog">إلغاء</button></div>`);
+    }
+    else if (action === 'confirm-consultation-erase') {
+      button.disabled = true;
+      await api(`/api/admin/consultations/${button.dataset.id}`,{method:'DELETE'});
+      closeDialog(); showToast('مُحيت بيانات التواصل وسُجّل الإجراء.'); router();
+    }
     else if (action === 'remove-membership') {
       openDialog(`<h2 id="dialog-title">إزالة عضوية</h2><p>${e(button.dataset.name || '')} من <b>${e(button.dataset.orgName || '')}</b></p><p class="classification-boundary">يفقد الحساب وصوله إلى هذه المؤسسة فقط. الحساب وعضوياته الأخرى وتقييمات المؤسسة تبقى كما هي.</p><div class="button-row"><button class="danger-button" data-action="confirm-remove-membership" data-user="${e(button.dataset.user)}" data-org="${e(button.dataset.org)}" type="button">تأكيد الإزالة</button><button class="secondary-button" data-action="close-dialog">إلغاء</button></div>`);
     }
@@ -1093,6 +1148,28 @@ document.addEventListener('submit', async event => {
       form.insertAdjacentHTML('afterend',`<p class="form-success">تم قبول الطلب. ${dev}</p>`);
     }
     else if (form.id === 'reset-form') { await api('/api/auth/reset-password',{method:'POST',body:JSON.stringify(data)});showToast('تم تحديث كلمة المرور.');navigate('login'); }
+    else if (form.id === 'consultation-filters') {
+      const params = new URLSearchParams();
+      Object.entries(data).forEach(([key, value]) => {
+        if (!value) return;
+        // Date inputs arrive as YYYY-MM-DD; the API filters on epoch seconds.
+        if (key === 'created_from') params.set(key, String(Math.floor(new Date(`${value}T00:00:00`).getTime() / 1000)));
+        else params.set(key, value);
+      });
+      navigate(`consultations?${params.toString()}`);
+    }
+    else if (form.id === 'consultation-status-form') {
+      await api(`/api/admin/consultations/${Number(data.lead_id)}/status`,{method:'POST',body:JSON.stringify({status:data.status,note:data.note || undefined,closure_reason:data.closure_reason || undefined})});
+      closeDialog(); showToast('حُدّثت حالة الطلب.'); router();
+    }
+    else if (form.id === 'consultation-note-form') {
+      await api(`/api/admin/consultations/${Number(data.lead_id)}/notes`,{method:'POST',body:JSON.stringify({note:data.note})});
+      closeDialog(); showToast('أُضيفت الملاحظة إلى سجل الطلب.'); router();
+    }
+    else if (form.id === 'consultation-assign-form') {
+      await api(`/api/admin/consultations/${Number(data.lead_id)}/assign`,{method:'POST',body:JSON.stringify({consultant_id:Number(data.consultant_id),note:data.note || undefined})});
+      closeDialog(); showToast('أُسند الطلب وأُشعر المستشار.'); router();
+    }
     else if (form.id === 'consultation-form') {
       const submit = form.querySelector('button[type="submit"]');
       const errorBox = form.querySelector('.form-error');

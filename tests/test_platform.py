@@ -604,6 +604,161 @@ class PlatformJourneyTests(unittest.TestCase):
         # The deleted account's session no longer authenticates.
         self.request("GET", "/api/me", token=victim, expected=401)
 
+    def _completed_direct_assessment(self, name):
+        token, assessment_id = self._direct_participant_assessment(name)
+        session = self.request("GET", f"/api/participant/session/{token}")
+        self.request("POST", f"/api/participant/session/{token}/answers", {
+            "answers": [{"item_id": item["id"], "value": 4} for item in session["items"]]
+        })
+        self.request("POST", f"/api/participant/session/{token}/submit", {})
+        return token, assessment_id
+
+    def test_each_lead_appears_once_with_both_construct_scores(self):
+        """A scored assessment must not split its lead into two board rows.
+
+        Joining assessment_scores directly yields one row per construct; the
+        earlier query grouped by the maturity label, which is present on the
+        MCM row and NULL on the SMCE row, so every lead was listed twice and
+        every status count was doubled.
+        """
+        token, assessment_id = self._completed_direct_assessment("منشأة صف واحد")
+        self.request("POST", "/api/consultations", {
+            "assessment_id": assessment_id, "participant_token": token,
+            "full_name": "صاحب الطلب", "email": "single-row@example.test",
+            "phone_number": "0501230001", "consent_to_contact": True,
+        }, expected=201)
+
+        admin = self.login()
+        board = self.request("GET", "/api/admin/consultations", token=admin)
+        mine = [lead for lead in board["leads"] if lead.get("email") == "single-row@example.test"]
+        self.assertEqual(1, len(mine), "the lead was listed more than once")
+        lead = mine[0]
+        # Both constructs land on the one row, with the stage label from MCM.
+        self.assertIsNotNone(lead["mcm_total"])
+        self.assertIsNotNone(lead["smce_total"])
+        self.assertTrue(lead["maturity_label"])
+        # Counts must match the rows they summarise.
+        self.assertEqual(len(board["leads"]), sum(board["counts"].values()))
+
+    def test_a_consultant_works_only_the_leads_assigned_to_them(self):
+        admin = self.login()
+        token, assessment_id = self._completed_direct_assessment("منشأة الإسناد")
+        lead = self.request("POST", "/api/consultations", {
+            "assessment_id": assessment_id, "participant_token": token,
+            "full_name": "صاحب الإسناد", "email": "assigned@example.test",
+            "phone_number": "0501230002", "consent_to_contact": True,
+        }, expected=201)["lead"]
+
+        self.request("POST", "/api/admin/users", {
+            "name": "مستشار الاختبار", "email": "consultant@example.test",
+            "password": "ConsultantPass2026", "role": "CONSULTANT", "organization_id": 1,
+        }, token=admin, expected=201)
+        consultant = self.login("consultant@example.test", "ConsultantPass2026")
+
+        # The board is reachable, but empty until something is assigned.
+        board = self.request("GET", "/api/admin/consultations", token=consultant)
+        self.assertEqual("ASSIGNED_TO_ME", board["scope"])
+        self.assertEqual([], [item for item in board["leads"] if item["id"] == lead["id"]])
+        # An unassigned lead is indistinguishable from a missing one.
+        self.assertEqual("consultation_lead_not_found", self.request(
+            "GET", f"/api/admin/consultations/{lead['id']}", token=consultant, expected=404)["error"])
+        users = self.request("GET", "/api/admin/users", token=admin)["users"]
+        consultant_id = next(u["id"] for u in users if u["email"] == "consultant@example.test")
+        # Assigning an unassigned lead to themselves is refused as not-found,
+        # not as forbidden, so the refusal does not confirm the lead exists.
+        self.assertEqual("consultation_lead_not_found", self.request(
+            "POST", f"/api/admin/consultations/{lead['id']}/assign",
+            {"consultant_id": consultant_id}, token=consultant, expected=404)["error"])
+
+        assigned = self.request("POST", f"/api/admin/consultations/{lead['id']}/assign",
+                                {"consultant_id": consultant_id}, token=admin)
+        self.assertEqual("ASSIGNED", assigned["status"])
+        board = self.request("GET", "/api/admin/consultations", token=consultant)
+        self.assertEqual([lead["id"]], [item["id"] for item in board["leads"]])
+        # Now that it is visible to them, reassignment is refused on authority
+        # rather than on existence.
+        self.assertEqual("permission_denied", self.request(
+            "POST", f"/api/admin/consultations/{lead['id']}/assign",
+            {"consultant_id": consultant_id}, token=consultant, expected=403)["error"])
+        # They can still do their own job on it.
+        self.request("POST", f"/api/admin/consultations/{lead['id']}/status",
+                     {"status": "CONTACTED", "note": "تم التواصل"}, token=consultant)
+
+        # Creation notifies administrators only; the consultant is told when
+        # the lead becomes theirs, so no notification points at a 404.
+        from mcm import database
+        with database.transaction() as db:
+            rows = db.execute(
+                """SELECT n.body FROM notifications n WHERE n.user_id=? AND n.type='CONSULTATION_LEAD'""",
+                (consultant_id,),
+            ).fetchall()
+        self.assertEqual(1, len(rows))
+        self.assertIn("أُسند", self.request("GET", "/api/notifications", token=consultant)["notifications"][0]["title"])
+
+    def test_withdrawn_consent_withholds_contact_data_and_blocks_outreach(self):
+        admin = self.login()
+        token, assessment_id = self._completed_direct_assessment("منشأة السحب")
+        lead = self.request("POST", "/api/consultations", {
+            "assessment_id": assessment_id, "participant_token": token,
+            "full_name": "صاحب السحب", "email": "withdrawn@example.test",
+            "phone_number": "0501230003", "consent_to_contact": True,
+        }, expected=201)["lead"]
+
+        board = self.request("GET", "/api/admin/consultations", token=admin)
+        before = next(item for item in board["leads"] if item["id"] == lead["id"])
+        self.assertEqual("withdrawn@example.test", before["email"])
+
+        self.request("POST", f"/api/consultations/{lead['id']}/consent", {"participant_token": token})
+
+        board = self.request("GET", "/api/admin/consultations", token=admin)
+        after = next(item for item in board["leads"] if item["id"] == lead["id"])
+        # The lead stays visible so the team knows not to contact it, but the
+        # details it no longer has a basis to hold are gone from the payload.
+        self.assertEqual("DO_NOT_CONTACT", after["status"])
+        self.assertIsNone(after.get("email"))
+        self.assertIsNone(after.get("phone_e164"))
+        self.assertEqual("CONTACT_CONSENT_WITHDRAWN", after["contact_withheld_reason"])
+        self.assertFalse(after["consent_to_contact"])
+
+        # Outreach transitions are refused; only closing remains available.
+        self.assertEqual("contact_consent_withdrawn", self.request(
+            "POST", f"/api/admin/consultations/{lead['id']}/status",
+            {"status": "CONVERTED"}, token=admin, expected=409)["error"])
+        self.request("POST", f"/api/admin/consultations/{lead['id']}/status",
+                     {"status": "CLOSED", "closure_reason": "سحب الموافقة"}, token=admin)
+
+        # Fulfilling the deletion request erases the details for good.
+        self.request("DELETE", f"/api/admin/consultations/{lead['id']}", token=admin)
+        board = self.request("GET", "/api/admin/consultations", token=admin)
+        self.assertEqual([], [item for item in board["leads"] if item["id"] == lead["id"]])
+        from mcm import database
+        with database.transaction() as db:
+            row = db.execute("SELECT email,phone_e164,deleted_at FROM consultation_leads WHERE id=?", (lead["id"],)).fetchone()
+        self.assertEqual("", row["email"])
+        self.assertEqual("", row["phone_e164"])
+        self.assertIsNotNone(row["deleted_at"])
+
+    def test_board_filters_narrow_results_without_widening_scope(self):
+        admin = self.login()
+        token, assessment_id = self._completed_direct_assessment("منشأة الفلاتر")
+        lead = self.request("POST", "/api/consultations", {
+            "assessment_id": assessment_id, "participant_token": token,
+            "full_name": "صاحب الفلاتر", "email": "filters@example.test",
+            "phone_number": "0501230004", "consent_to_contact": True,
+            "consultation_topics": ["INFORMATION_GOVERNANCE"],
+        }, expected=201)["lead"]
+
+        matched = self.request("GET", "/api/admin/consultations?status=NEW&topic=INFORMATION_GOVERNANCE", token=admin)
+        self.assertIn(lead["id"], [item["id"] for item in matched["leads"]])
+        self.assertEqual({"status": "NEW", "topic": "INFORMATION_GOVERNANCE"}, matched["filters"])
+
+        missed = self.request("GET", "/api/admin/consultations?topic=CUSTOMER_JOURNEY&status=CONVERTED", token=admin)
+        self.assertNotIn(lead["id"], [item["id"] for item in missed["leads"]])
+        # Counts describe the filtered set, not the whole table.
+        self.assertEqual(len(missed["leads"]), sum(missed["counts"].values()))
+        self.assertEqual("invalid_filter", self.request(
+            "GET", "/api/admin/consultations?assigned_consultant_id=abc", token=admin, expected=422)["error"])
+
     def test_consultation_admin_screen_is_restricted_and_reads_scores_from_the_assessment(self):
         token, assessment_id = self._direct_participant_assessment("منشأة لوحة الاستشارات")
         self.request("POST", "/api/consultations", {
