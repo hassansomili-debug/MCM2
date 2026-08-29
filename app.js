@@ -28,6 +28,8 @@ const roleLabels = {
 const statusLabels = {
   DRAFT: 'مسودة', IN_PROGRESS: 'قيد التنفيذ', COMPLETED: 'مكتمل', PILOT: 'قيد التجربة الداخلية',
   VALIDATED: 'مُعتمد', ARCHIVED: 'مؤرشف', PENDING: 'بانتظار القبول', ACCEPTED: 'مقبولة',
+  ACTIVE: 'نشط', INACTIVE: 'موقوف',
+  EVIDENCE_INFORMED: 'قائم على الأدلة', EXPERT_REVIEWED: 'مراجَع من خبراء', EMPIRICALLY_VALIDATED: 'محقق تجريبيًا',
   NOT_STARTED: 'لم يبدأ', IN_PROGRESS_ROADMAP: 'قيد التنفيذ', DEFERRED: 'مؤجل',
 };
 const errorLabels = {
@@ -676,8 +678,8 @@ async function renderDataset(route) {
 
 async function renderInstruments() {
   loading(); const data = await api('/api/instruments');
-  const rows = data.versions.map(item => `<div class="data-table__row"><strong>${e(item.version)}<small>${e(item.name)}</small></strong><span>${badge(item.status,item.status === 'PILOT' ? 'warning':'')}</span><span>${number(item.item_count)}</span><span>${number(item.assessment_count)}</span><span>${dateText(item.created_at)}</span><span class="button-row"><a class="secondary-button" href="#instrument/${item.id}">فتح</a>${item.status === 'DRAFT' ? `<button class="primary-button" data-action="publish-instrument" data-id="${item.id}">نشر Pilot</button>` : `<button class="secondary-button" data-action="duplicate-instrument" data-id="${item.id}">نسخ لمسودة</button>`}</span></div>`);
-  appView.innerHTML = `<div class="page">${pageHeading('البحث · الأداة','إصدارات الأداة','النسخ المستخدمة غير قابلة للتعديل؛ أي تغيير يبدأ مسودة جديدة.')}<section class="panel"><div class="card-title"><div><h2>استيراد DOCX منظم</h2><p>الرفع والتحقق يجريان على الخادم بحد حجم ونوع ملف.</p></div><span class="status-badge warning">لا نشر تلقائي</span></div><form id="instrument-upload-form" class="form-grid"><label class="field full"><span>ملف DOCX</span><input id="instrument-file" name="instrument" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required><small>يجب أن يحتوي TABLE:DIMENSIONS وTABLE:ITEMS والجداول العلمية المرتبطة.</small></label><button class="primary-button full">رفع والتحقق</button></form><div id="instrument-preview"></div></section><section class="panel">${rows.length ? table(['الإصدار','الحالة','البنود','التقييمات','الإنشاء',''],rows,6,860) : emptyState('لا توجد إصدارات','ارفع ملف الأداة المنظم لإنشاء مسودة.')}</section></div>`;
+  const rows = data.versions.map(item => `<div class="data-table__row"><strong>${e(item.version)}<small>${e(item.name)}</small></strong><span>${badge(item.product_status, item.product_status === 'ACTIVE' ? '' : 'warning')}</span><span>${badge(item.scientific_status, item.scientific_status === 'EMPIRICALLY_VALIDATED' ? '' : 'warning')}</span><span>${number(item.item_count)}</span><span>${number(item.assessment_count)}</span><span class="button-row"><a class="secondary-button" href="#instrument/${item.id}">فتح</a>${item.product_status === 'DRAFT' ? `<button class="primary-button" data-action="publish-instrument" data-id="${item.id}">تفعيل الإصدار</button>` : `<button class="secondary-button" data-action="duplicate-instrument" data-id="${item.id}">نسخ لمسودة</button>`}<button class="secondary-button" data-action="scientific-status" data-id="${item.id}" data-current="${e(item.scientific_status)}">الحالة العلمية</button></span></div>`);
+  appView.innerHTML = `<div class="page">${pageHeading('البحث · الأداة','إصدارات الأداة','النسخ المستخدمة غير قابلة للتعديل؛ أي تغيير يبدأ مسودة جديدة.')}<section class="panel"><div class="card-title"><div><h2>استيراد DOCX منظم</h2><p>الرفع والتحقق يجريان على الخادم بحد حجم ونوع ملف.</p></div><span class="status-badge warning">لا نشر تلقائي</span></div><form id="instrument-upload-form" class="form-grid"><label class="field full"><span>ملف DOCX</span><input id="instrument-file" name="instrument" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" required><small>يجب أن يحتوي TABLE:DIMENSIONS وTABLE:ITEMS والجداول العلمية المرتبطة.</small></label><button class="primary-button full">رفع والتحقق</button></form><div id="instrument-preview"></div></section><section class="panel"><div class="card-title"><div><h2>حالتان منفصلتان</h2><p>حالة المنتج قرار تشغيلي. الحالة العلمية ادعاء استدلالي لا يتغير تلقائيًا، ويحتاج مبررًا مكتوبًا ويُسجَّل في التدقيق.</p></div></div>${rows.length ? table(['الإصدار','حالة المنتج','الحالة العلمية','البنود','التقييمات',''],rows,6,940) : emptyState('لا توجد إصدارات','ارفع ملف الأداة المنظم لإنشاء مسودة.')}</section></div>`;
 }
 
 async function renderInstrument(route) {
@@ -796,6 +798,10 @@ document.addEventListener('click', async event => {
     else if (action === 'scroll-model') scrollElementIntoView(document.querySelector('#methodology-public'));
     else if (action === 'scroll-maturity') scrollElementIntoView(document.querySelector('#maturity-public'));
     else if (action === 'stage-detail') stageDetailDialog(button.dataset.code);
+    else if (action === 'scientific-status') {
+      const options = ['EVIDENCE_INFORMED','EXPERT_REVIEWED','EMPIRICALLY_VALIDATED','ARCHIVED'];
+      openDialog(`<h2 id="dialog-title">تغيير الحالة العلمية</h2><p class="classification-boundary">هذا ادعاء استدلالي عن الإصدار، ومستقل عن حالة المنتج. لا يُرفع تلقائيًا، ويُسجَّل كل تغيير في سجل التدقيق باسمك.</p><form id="scientific-status-form" class="form-grid"><input type="hidden" name="version_id" value="${e(button.dataset.id)}"><label class="field full"><span>الحالة العلمية</span><select name="scientific_status" required>${options.map(value=>`<option value="${value}" ${button.dataset.current === value ? 'selected':''}>${e(statusLabels[value] || value)}</option>`).join('')}</select></label><label class="field full"><span>المبرر (إلزامي)</span><textarea name="rationale" rows="3" required minlength="10" placeholder="ما الدليل الذي يسند هذه الحالة؟"></textarea></label><button class="primary-button full" type="submit">حفظ الحالة العلمية</button></form>`);
+    }
     else if (action === 'print-result') window.print();
     else if (action === 'forgot-password') navigate('forgot');
     else if (action === 'close-dialog') closeDialog();
@@ -871,6 +877,10 @@ document.addEventListener('submit', async event => {
       form.insertAdjacentHTML('afterend',`<p class="form-success">تم قبول الطلب. ${dev}</p>`);
     }
     else if (form.id === 'reset-form') { await api('/api/auth/reset-password',{method:'POST',body:JSON.stringify(data)});showToast('تم تحديث كلمة المرور.');navigate('login'); }
+    else if (form.id === 'scientific-status-form') {
+      await api(`/api/instrument-versions/${Number(data.version_id)}/scientific-status`,{method:'PATCH',body:JSON.stringify({scientific_status:data.scientific_status,rationale:data.rationale})});
+      closeDialog(); showToast('سُجّلت الحالة العلمية في سجل التدقيق.'); router();
+    }
     else if (form.id === 'report-form') { const report=await api('/api/reports',{method:'POST',body:JSON.stringify({assessment_id:Number(data.assessment_id),report_type:data.report_type})});await downloadApi(report.download_url);router(); }
     else if (form.id === 'invite-form') {
       const result=await api('/api/invitations',{method:'POST',body:JSON.stringify({...data,assessment_id:Number(data.assessment_id)})});

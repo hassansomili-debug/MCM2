@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import config
 from .ai_plans import generate_improvement_plan
-from .database import INTEGRITY_ERRORS, assessment_research_eligible, audit, connect, get_config, init_db, now, password_hash, select_for_update, token_hash, verify_password
+from .database import INTEGRITY_ERRORS, PRODUCT_STATUSES, SCIENTIFIC_STATUSES, assessment_research_eligible, audit, connect, get_config, init_db, now, password_hash, select_for_update, token_hash, verify_password
 from .exports import assessment_pdf, build_research_sheets, csv_bytes, fingerprint, research_workbook, spss_package
 from .instruments import InstrumentImportError, parse_docx_base64, validate_tables
 from .scoring import (
@@ -49,6 +49,9 @@ PUBLIC_MODEL = {
     "result_disclaimer_ar": (
         "النتيجة تشخيصية وتطويرية، ولا تمثل شهادة اعتماد أو حكمًا نهائيًا على أداء المنشأة."
     ),
+    # Only EMPIRICALLY_VALIDATED may ever change this sentence, and only after
+    # an authorised researcher records that status with a written rationale.
+    "validation_claim_ar": None,
     "methodology_ar": [
         (
             "نضج MCM نموذج تطبيقي لقياس وتطوير النضج الاتصالي التسويقي في المنشآت. "
@@ -63,6 +66,21 @@ PUBLIC_MODEL = {
         ),
     ],
 }
+
+
+def public_model(scientific_status: str = "EVIDENCE_INFORMED") -> dict:
+    """The public model description for a given scientific status.
+
+    A validation sentence is emitted only when the active version has actually
+    been recorded as EMPIRICALLY_VALIDATED by an authorised researcher. Every
+    weaker status yields no claim at all, so the interface cannot drift into
+    asserting validation the evidence does not support.
+    """
+    model = dict(PUBLIC_MODEL)
+    model["scientific_status"] = scientific_status
+    if scientific_status == "EMPIRICALLY_VALIDATED":
+        model["validation_claim_ar"] = "اكتمل التحقق الكمي التجريبي لهذا الإصدار."
+    return model
 
 
 class APIError(Exception):
@@ -374,10 +392,11 @@ class API(BaseHTTPRequestHandler):
         db = connect()
         try:
             version = db.execute(
-                """SELECT id FROM instrument_versions
+                """SELECT id,scientific_status FROM instrument_versions
                    WHERE archived_at IS NULL
                    ORDER BY COALESCE(published_at,0) DESC, id DESC LIMIT 1"""
             ).fetchone()
+            scientific_status = version["scientific_status"] if version else "EVIDENCE_INFORMED"
             levels = []
             if version:
                 for row in db.execute(
@@ -411,7 +430,7 @@ class API(BaseHTTPRequestHandler):
                 "تتطور قدرة المنشأة الاتصالية عبر خمس مراحل، تبدأ من الممارسات التي تعتمد "
                 "على ردود الفعل وتنتهي بقدرة مستدامة وذكية وقابلة للتوسع."
             ),
-            "model": PUBLIC_MODEL,
+            "model": public_model(scientific_status),
             "levels": levels,
         }
 
@@ -920,7 +939,8 @@ class API(BaseHTTPRequestHandler):
         try:
             if method == "GET" and path in {"/api/instruments", "/api/research/instruments"}:
                 rows = db.execute(
-                    """SELECT v.id,v.instrument_id,v.version,v.status,v.notes,v.created_at,v.published_at,v.archived_at,
+                    """SELECT v.id,v.instrument_id,v.version,v.status,v.product_status,v.scientific_status,
+                              v.scientific_status_changed_at,v.notes,v.created_at,v.published_at,v.archived_at,
                               i.code AS instrument_code,i.name,COUNT(DISTINCT it.id) AS item_count,
                               COUNT(DISTINCT a.id) AS assessment_count
                        FROM instrument_versions v JOIN instruments i ON i.id=v.instrument_id
@@ -975,19 +995,68 @@ class API(BaseHTTPRequestHandler):
                     raise APIError("instrument_version_not_publishable", 409)
                 if db.execute("SELECT COUNT(*) FROM items WHERE version_id=?", (version_id,)).fetchone()[0] == 0:
                     raise APIError("instrument_items_required", 422)
-                db.execute("UPDATE instrument_versions SET status='PILOT',published_at=? WHERE id=?", (now(), version_id))
-                audit(db, context["id"], "instrument_publication", "instrument_version", version_id, {"status": "PILOT"})
+                # Publishing is an operational decision only. It moves the
+                # product status to ACTIVE and never touches scientific status.
+                db.execute(
+                    "UPDATE instrument_versions SET status='PILOT',product_status='ACTIVE',published_at=? WHERE id=?",
+                    (now(), version_id),
+                )
+                audit(db, context["id"], "instrument_publication", "instrument_version", version_id, {"status": "PILOT", "product_status": "ACTIVE"})
                 db.commit()
-                return self.send_json({"id": version_id, "status": "PILOT", "notice": "Research Beta - publication does not assert empirical validation."})
+                return self.send_json({
+                    "id": version_id,
+                    "status": "PILOT",
+                    "product_status": "ACTIVE",
+                    "scientific_status": version["scientific_status"],
+                    "notice": "Publication is an operational decision and asserts no empirical validation.",
+                })
+            scientific = re.fullmatch(r"/api/instrument-versions/(\d+)/scientific-status", path)
+            if method in {"POST", "PATCH"} and scientific:
+                version_id = int(scientific.group(1))
+                version = db.execute("SELECT * FROM instrument_versions WHERE id=?", (version_id,)).fetchone()
+                if not version:
+                    raise APIError("instrument_version_not_found", 404)
+                target = str(data.get("scientific_status") or "").strip().upper()
+                if target not in SCIENTIFIC_STATUSES:
+                    raise APIError("unsupported_scientific_status", 422)
+                rationale = str(data.get("rationale") or "").strip()
+                # An evidentiary claim must be justified in writing by the person
+                # making it; the platform never advances it on its own.
+                if not rationale:
+                    raise APIError("scientific_status_rationale_required", 422)
+                previous = version["scientific_status"]
+                changed_at = now()
+                db.execute(
+                    """UPDATE instrument_versions
+                       SET scientific_status=?,scientific_status_changed_at=?,scientific_status_changed_by=?
+                       WHERE id=?""",
+                    (target, changed_at, context["id"], version_id),
+                )
+                audit(db, context["id"], "instrument_scientific_status", "instrument_version", version_id, {
+                    "previous_scientific_status": previous,
+                    "new_scientific_status": target,
+                    "rationale": rationale[:500],
+                    "product_status_unchanged": version["product_status"],
+                })
+                db.commit()
+                return self.send_json({
+                    "id": version_id,
+                    "scientific_status": target,
+                    "previous_scientific_status": previous,
+                    "changed_at": changed_at,
+                })
             archive = re.fullmatch(r"/api/instrument-versions/(\d+)/archive", path)
             if method == "POST" and archive:
                 version_id = int(archive.group(1))
                 if not db.execute("SELECT 1 FROM instrument_versions WHERE id=?", (version_id,)).fetchone():
                     raise APIError("instrument_version_not_found", 404)
-                db.execute("UPDATE instrument_versions SET status='ARCHIVED',archived_at=? WHERE id=?", (now(), version_id))
-                audit(db, context["id"], "instrument_archive", "instrument_version", version_id)
+                db.execute(
+                    "UPDATE instrument_versions SET status='ARCHIVED',product_status='ARCHIVED',archived_at=? WHERE id=?",
+                    (now(), version_id),
+                )
+                audit(db, context["id"], "instrument_archive", "instrument_version", version_id, {"product_status": "ARCHIVED"})
                 db.commit()
-                return self.send_json({"id": version_id, "status": "ARCHIVED"})
+                return self.send_json({"id": version_id, "status": "ARCHIVED", "product_status": "ARCHIVED"})
             duplicate = re.fullmatch(r"/api/instrument-versions/(\d+)/duplicate", path)
             if method == "POST" and duplicate:
                 source_id = int(duplicate.group(1))

@@ -293,6 +293,78 @@ class PlatformJourneyTests(unittest.TestCase):
             self.assertEqual(current_label, metadata["new_label_ar"])
             self.assertFalse(metadata["scores_rewritten"])
 
+    def test_product_status_and_scientific_status_are_separate(self):
+        admin = self.login()
+        versions = self.request("GET", "/api/instruments", token=admin)["versions"]
+        current = next(item for item in versions if item["version"] == "0.4.0")
+        # Publishing made the version operationally ACTIVE, but the scientific
+        # claim stayed at the weakest value. One must never imply the other.
+        self.assertEqual("ACTIVE", current["product_status"])
+        self.assertEqual("EVIDENCE_INFORMED", current["scientific_status"])
+        self.assertIsNone(current["scientific_status_changed_at"])
+
+        payload = self.request("GET", "/api/public/maturity-levels")
+        self.assertEqual("EVIDENCE_INFORMED", payload["model"]["scientific_status"])
+        # No validation sentence is emitted below EMPIRICALLY_VALIDATED.
+        self.assertIsNone(payload["model"]["validation_claim_ar"])
+
+    def test_scientific_status_change_requires_authorisation_and_is_audited(self):
+        admin = self.login()
+        versions = self.request("GET", "/api/instruments", token=admin)["versions"]
+        version_id = next(item for item in versions if item["version"] == "0.4.0")["id"]
+        path = f"/api/instrument-versions/{version_id}/scientific-status"
+
+        # A company administrator may not make an evidentiary claim.
+        self.request("POST", "/api/auth/register", {
+            "name": "مسؤول شركة", "email": "status-probe@example.test",
+            "password": "StatusProbe2026", "organization_name": "منشأة اختبار الحالة",
+            "service_consent": True,
+        }, expected=201)
+        company = self.login("status-probe@example.test", "StatusProbe2026")
+        denied = self.request("PATCH", path, {
+            "scientific_status": "EMPIRICALLY_VALIDATED", "rationale": "محاولة غير مصرح بها",
+        }, token=company, expected=403)
+        self.assertEqual("permission_denied", denied["error"])
+
+        # An unknown value and a missing rationale are both refused.
+        self.assertEqual("unsupported_scientific_status", self.request(
+            "PATCH", path, {"scientific_status": "TOTALLY_PROVEN", "rationale": "x" * 20},
+            token=admin, expected=422)["error"])
+        self.assertEqual("scientific_status_rationale_required", self.request(
+            "PATCH", path, {"scientific_status": "EXPERT_REVIEWED"},
+            token=admin, expected=422)["error"])
+
+        result = self.request("PATCH", path, {
+            "scientific_status": "EXPERT_REVIEWED",
+            "rationale": "اكتملت مراجعة لجنة الخبراء للبنود والأبعاد.",
+        }, token=admin)
+        self.assertEqual("EXPERT_REVIEWED", result["scientific_status"])
+        self.assertEqual("EVIDENCE_INFORMED", result["previous_scientific_status"])
+
+        # The product status is untouched by a scientific decision.
+        versions = self.request("GET", "/api/instruments", token=admin)["versions"]
+        updated = next(item for item in versions if item["id"] == version_id)
+        self.assertEqual("ACTIVE", updated["product_status"])
+        self.assertEqual("EXPERT_REVIEWED", updated["scientific_status"])
+
+        from mcm import database
+        with database.transaction() as db:
+            record = db.execute(
+                """SELECT user_id,metadata_json FROM audit_logs
+                   WHERE action='instrument_scientific_status' ORDER BY id DESC LIMIT 1"""
+            ).fetchone()
+        self.assertIsNotNone(record, "a scientific status change must be audited")
+        metadata = json.loads(record["metadata_json"])
+        self.assertEqual("EVIDENCE_INFORMED", metadata["previous_scientific_status"])
+        self.assertEqual("EXPERT_REVIEWED", metadata["new_scientific_status"])
+        self.assertIn("لجنة الخبراء", metadata["rationale"])
+        self.assertIsNotNone(record["user_id"], "the actor must be recorded")
+
+        # Restore, so the ordering of other tests cannot depend on this one.
+        self.request("PATCH", path, {
+            "scientific_status": "EVIDENCE_INFORMED", "rationale": "إعادة الضبط بعد الاختبار.",
+        }, token=admin)
+
     def test_instrument_specification_is_not_misrepresented_as_item_bank(self):
         admin = self.login()
         document = (Path(__file__).parents[1] / "متطلبات_منصة_نضج_MCM.docx").read_bytes()

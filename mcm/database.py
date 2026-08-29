@@ -21,12 +21,30 @@ except ImportError:  # SQLite-only local development does not need psycopg insta
 INTEGRITY_ERRORS = (sqlite3.IntegrityError,) + (
     (PostgresIntegrityError,) if PostgresIntegrityError is not None else ()
 )
-REQUIRED_SCHEMA_VERSION = 5
+REQUIRED_SCHEMA_VERSION = 6
 # Schema versions this release can upgrade in place. Version 4 differs from 5
 # only by additive columns and a stage-label revision, both of which are
 # applied and verified by migrate_postgres(). Any other older version is still
 # refused rather than silently marked complete.
-SUPPORTED_UPGRADE_VERSIONS = frozenset({4})
+SUPPORTED_UPGRADE_VERSIONS = frozenset({4, 5})
+
+# Product lifecycle is an operational decision; scientific status is an
+# evidentiary claim. They are deliberately separate so that publishing a
+# version can never imply validation. Scientific status is never inferred or
+# advanced automatically — only an authorised researcher or super administrator
+# may change it, and every change is audited.
+PRODUCT_STATUSES = ("DRAFT", "ACTIVE", "INACTIVE", "ARCHIVED")
+SCIENTIFIC_STATUSES = ("EVIDENCE_INFORMED", "EXPERT_REVIEWED", "EMPIRICALLY_VALIDATED", "ARCHIVED")
+# Backfill map from the pre-existing single `status` column.
+_PRODUCT_STATUS_BACKFILL = {
+    "DRAFT": "DRAFT",
+    "EXPERT_REVIEW": "DRAFT",
+    "PILOT": "ACTIVE",
+    "PUBLISHED": "ACTIVE",
+    "published": "ACTIVE",
+    "VALIDATED": "ACTIVE",
+    "ARCHIVED": "ARCHIVED",
+}
 
 
 def now() -> int:
@@ -206,6 +224,10 @@ CREATE TABLE IF NOT EXISTS instrument_versions (
   instrument_id INTEGER NOT NULL,
   version TEXT NOT NULL,
   status TEXT NOT NULL,
+  product_status TEXT NOT NULL DEFAULT 'DRAFT',
+  scientific_status TEXT NOT NULL DEFAULT 'EVIDENCE_INFORMED',
+  scientific_status_changed_at INTEGER,
+  scientific_status_changed_by INTEGER,
   notes TEXT,
   metadata_json TEXT NOT NULL DEFAULT '{}',
   created_by INTEGER,
@@ -651,6 +673,10 @@ POSTGRES_TABLES = tuple(schema_table_names(POSTGRES_SCHEMA))
 # leaves an existing table untouched, so these run separately during migration.
 POSTGRES_ADDITIVE_COLUMNS = (
     "ALTER TABLE maturity_levels ADD COLUMN IF NOT EXISTS content_json TEXT",
+    "ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS product_status TEXT NOT NULL DEFAULT 'DRAFT'",
+    "ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS scientific_status TEXT NOT NULL DEFAULT 'EVIDENCE_INFORMED'",
+    "ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS scientific_status_changed_at BIGINT",
+    "ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS scientific_status_changed_by BIGINT",
 )
 
 
@@ -783,6 +809,9 @@ def _migrate_legacy(db: sqlite3.Connection) -> None:
         "instrument_versions": {
             "notes": "TEXT", "metadata_json": "TEXT NOT NULL DEFAULT '{}'", "created_by": "INTEGER",
             "created_at": "INTEGER NOT NULL DEFAULT 0", "published_at": "INTEGER", "archived_at": "INTEGER",
+            "product_status": "TEXT NOT NULL DEFAULT 'DRAFT'",
+            "scientific_status": "TEXT NOT NULL DEFAULT 'EVIDENCE_INFORMED'",
+            "scientific_status_changed_at": "INTEGER", "scientific_status_changed_by": "INTEGER",
         },
         "dimensions": {
             "version_id": "INTEGER", "name_en": "TEXT", "weight": "REAL NOT NULL DEFAULT 1",
@@ -1093,6 +1122,7 @@ def _ensure_seed_data(db: sqlite3.Connection, *, reset_admin_password: bool = Fa
                         "scores_rewritten": False,
                     },
                 )
+    _backfill_version_statuses(db)
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('MIN_BENCHMARK_SAMPLE','10',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('GAP_THRESHOLD','15',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('PRIORITY_WEIGHTS',?,?)", (json.dumps({"gap": 0.45, "impact": 0.25, "dependency": 0.15, "effort": 0.10, "confidence": 0.05}), timestamp))
@@ -1101,6 +1131,32 @@ def _ensure_seed_data(db: sqlite3.Connection, *, reset_admin_password: bool = Fa
             "INSERT INTO notifications(user_id,type,title,body,target_url,created_at) VALUES (?,?,?,?,?,?)",
             (user_id, "WELCOME", "مرحبًا بك في مقياس النضج الاتصالي التسويقي", "يمكن للمشاركين البدء مباشرة، ويمكنك متابعة الحالات وتصدير بيانات SPSS.", "#research", timestamp),
         )
+
+
+def _backfill_version_statuses(db: sqlite3.Connection) -> None:
+    """Derive product status from the operational lifecycle, once, per version.
+
+    Scientific status is deliberately *not* derived. Every version starts at
+    `EVIDENCE_INFORMED`, the weakest claim, and only an authorised researcher or
+    super administrator can advance it through the API. Publishing a version,
+    archiving it, or running this migration can never assert validation.
+    """
+    rows = db.execute(
+        "SELECT id,status,product_status,archived_at FROM instrument_versions"
+    ).fetchall()
+    for row in rows:
+        # Only fill a column still holding its default, so an explicit
+        # operational decision recorded later is never overwritten by a reseed.
+        if row["product_status"] not in (None, "", "DRAFT"):
+            continue
+        target = _PRODUCT_STATUS_BACKFILL.get(row["status"], "DRAFT")
+        if row["archived_at"]:
+            target = "ARCHIVED"
+        if target != row["product_status"]:
+            db.execute(
+                "UPDATE instrument_versions SET product_status=? WHERE id=?",
+                (target, row["id"]),
+            )
 
 
 def _sqlite_table_exists(db: sqlite3.Connection, table: str) -> bool:
@@ -1161,6 +1217,7 @@ def init_db() -> None:
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (3,'scientific_instrument_v02_platform_v040',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (4,'supabase_postgresql_adapter_and_data_integrity',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (5,'maturity_stage_labels_and_public_stage_content',?)", (now(),))
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (6,'separate_product_and_scientific_status',?)", (now(),))
         db.execute("PRAGMA optimize")
         db.commit()
     finally:
@@ -1238,6 +1295,7 @@ def migrate_postgres() -> dict[str, int]:
             (3, "scientific_instrument_v02_platform_v040"),
             (4, "supabase_postgresql_adapter_and_data_integrity"),
             (5, "maturity_stage_labels_and_public_stage_content"),
+            (6, "separate_product_and_scientific_status"),
         )
         for version, name in migration_rows:
             db.execute(
