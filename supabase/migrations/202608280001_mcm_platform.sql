@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS dimensions (
   source_type TEXT,
   source_reference TEXT,
   sort_order BIGINT NOT NULL DEFAULT 0,
+  content_json TEXT,
   UNIQUE(version_id, code),
   FOREIGN KEY(version_id) REFERENCES instrument_versions(id)
 );
@@ -627,3 +628,4 @@ ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS product_status TEXT NOT
 ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS scientific_status TEXT NOT NULL DEFAULT 'EVIDENCE_INFORMED';
 ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS scientific_status_changed_at BIGINT;
 ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS scientific_status_changed_by BIGINT;
+ALTER TABLE dimensions ADD COLUMN IF NOT EXISTS content_json TEXT;

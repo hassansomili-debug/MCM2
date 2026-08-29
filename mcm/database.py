@@ -28,12 +28,12 @@ except ImportError:  # SQLite-only local development does not need psycopg insta
 INTEGRITY_ERRORS = (sqlite3.IntegrityError,) + (
     (PostgresIntegrityError,) if PostgresIntegrityError is not None else ()
 )
-REQUIRED_SCHEMA_VERSION = 8
+REQUIRED_SCHEMA_VERSION = 9
 # Schema versions this release can upgrade in place. Version 4 differs from 5
 # only by additive columns and a stage-label revision, both of which are
 # applied and verified by migrate_postgres(). Any other older version is still
 # refused rather than silently marked complete.
-SUPPORTED_UPGRADE_VERSIONS = frozenset({4, 5, 6, 7})
+SUPPORTED_UPGRADE_VERSIONS = frozenset({4, 5, 6, 7, 8})
 
 CONSULTATION_STATUSES = (
     "NEW", "ASSIGNED", "CONTACTED", "QUALIFIED",
@@ -275,6 +275,7 @@ CREATE TABLE IF NOT EXISTS dimensions (
   source_type TEXT,
   source_reference TEXT,
   sort_order INTEGER NOT NULL DEFAULT 0,
+  content_json TEXT,
   UNIQUE(version_id, code),
   FOREIGN KEY(version_id) REFERENCES instrument_versions(id)
 );
@@ -785,6 +786,7 @@ POSTGRES_ADDITIVE_COLUMNS = (
     "ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS scientific_status TEXT NOT NULL DEFAULT 'EVIDENCE_INFORMED'",
     "ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS scientific_status_changed_at BIGINT",
     "ALTER TABLE instrument_versions ADD COLUMN IF NOT EXISTS scientific_status_changed_by BIGINT",
+    "ALTER TABLE dimensions ADD COLUMN IF NOT EXISTS content_json TEXT",
 )
 
 
@@ -922,6 +924,7 @@ def _migrate_legacy(db: sqlite3.Connection) -> None:
             "scientific_status_changed_at": "INTEGER", "scientific_status_changed_by": "INTEGER",
         },
         "dimensions": {
+            "content_json": "TEXT",
             "version_id": "INTEGER", "name_en": "TEXT", "weight": "REAL NOT NULL DEFAULT 1",
             "source_type": "TEXT", "source_reference": "TEXT", "sort_order": "INTEGER NOT NULL DEFAULT 0",
         },
@@ -1371,6 +1374,7 @@ def init_db() -> None:
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (6,'separate_product_and_scientific_status',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (7,'consultation_leads_and_consent_versioning',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (8,'participant_accounts_and_join_codes',?)", (now(),))
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (9,'dimension_knowledge_content',?)", (now(),))
         db.execute("PRAGMA optimize")
         db.commit()
     finally:
@@ -1451,6 +1455,7 @@ def migrate_postgres() -> dict[str, int]:
             (6, "separate_product_and_scientific_status"),
             (7, "consultation_leads_and_consent_versioning"),
             (8, "participant_accounts_and_join_codes"),
+            (9, "dimension_knowledge_content"),
         )
         for version, name in migration_rows:
             db.execute(

@@ -446,6 +446,13 @@ class API(BaseHTTPRequestHandler):
             return self.send_json(self._public_maturity_levels())
         if method == "GET" and path == "/api/public/privacy":
             return self.send_json(PRIVACY_NOTICE)
+        if method == "GET" and path == "/api/public/knowledge":
+            db = connect()
+            try:
+                # Public readers see only what has actually been written.
+                return self.send_json(self._knowledge_payload(db, include_empty=False))
+            finally:
+                db.close()
         if method == "POST" and path == "/api/participant/account":
             return self._participant_account(data)
         if method == "POST" and path == "/api/participant/join":
@@ -477,7 +484,7 @@ class API(BaseHTTPRequestHandler):
             return self._organization(method, path, data, context)
         if path.startswith("/api/notifications") or path == "/api/settings":
             return self._preferences(method, path, data, context)
-        if path.startswith("/api/instruments") or path.startswith("/api/instrument-versions") or path.startswith("/api/research/instruments") or path.startswith("/api/research/items") or path.startswith("/api/research/codebook"):
+        if path.startswith("/api/instruments") or path.startswith("/api/instrument-versions") or path.startswith("/api/research/instruments") or path.startswith("/api/research/items") or path.startswith("/api/research/codebook") or path.startswith("/api/research/knowledge"):
             return self._instruments(method, path, query, data, context)
         if path.startswith("/api/assessments"):
             return self._assessments(method, path, data, context)
@@ -1256,6 +1263,58 @@ class API(BaseHTTPRequestHandler):
         finally:
             db.close()
 
+    # The fields the knowledge base holds for each dimension. Empty by design:
+    # this is the structure, and the wording is the researcher's to author
+    # through the interface rather than something the platform invents.
+    KNOWLEDGE_FIELDS = ("definition", "why_it_matters", "improving_looks_like", "indicators")
+
+    def _knowledge_payload(self, db, *, include_empty: bool = True) -> dict:
+        version = db.execute(
+            """SELECT id,version FROM instrument_versions
+               WHERE archived_at IS NULL ORDER BY COALESCE(published_at,0) DESC, id DESC LIMIT 1"""
+        ).fetchone()
+        constructs: dict[str, list] = {"MCM": [], "SMCE": [], "ENABLER": [], "OUTCOME": []}
+        written = 0
+        if version:
+            for row in db.execute(
+                """SELECT code,construct,name,name_en,sort_order,content_json
+                   FROM dimensions WHERE version_id=? ORDER BY construct,sort_order,code""",
+                (version["id"],),
+            ):
+                try:
+                    content = json.loads(row["content_json"]) if row["content_json"] else {}
+                except (TypeError, ValueError):
+                    content = {}
+                entry = {
+                    "code": row["code"],
+                    "name_ar": row["name"],
+                    "name_en": row["name_en"],
+                    "content": {field: (content.get(field) or "") for field in self.KNOWLEDGE_FIELDS},
+                }
+                entry["written"] = any(entry["content"].values())
+                written += int(entry["written"])
+                if entry["written"] or include_empty:
+                    constructs.setdefault(row["construct"], []).append(entry)
+        total = sum(len(items) for items in constructs.values())
+        return {
+            "instrument_version": version["version"] if version else None,
+            "fields": list(self.KNOWLEDGE_FIELDS),
+            "field_labels_ar": {
+                "definition": "التعريف",
+                "why_it_matters": "لماذا يهم",
+                "improving_looks_like": "كيف يبدو تحسينه",
+                "indicators": "مؤشرات القياس",
+            },
+            "constructs": constructs,
+            "dimension_count": total,
+            "written_count": written,
+            "complete": total > 0 and written == total,
+            "authoring_notice_ar": (
+                "المحتوى المعرفي يكتبه الباحث المسؤول عن الأداة. الحقول غير المكتوبة "
+                "تظهر فارغة صراحةً ولا تُملأ بنص مولّد."
+            ),
+        }
+
     def _public_maturity_levels(self) -> dict:
         """Serve the five stages for the public stage section and methodology page.
 
@@ -1757,6 +1816,45 @@ class API(BaseHTTPRequestHandler):
                     version_id = int(path.split("/")[3])
                 rows = db.execute("SELECT * FROM items WHERE version_id=? ORDER BY sort_order,id", (version_id,)).fetchall()
                 return self.send_json({"version_id": version_id, "items": [dict(row) for row in rows]})
+            if method == "GET" and path == "/api/research/knowledge":
+                # The authoring view: every dimension, written or not.
+                return self.send_json(self._knowledge_payload(db, include_empty=True))
+            knowledge = re.fullmatch(r"/api/research/knowledge/([A-Za-z0-9_]+)", path)
+            if knowledge and method in {"POST", "PATCH"}:
+                code = knowledge.group(1).upper()
+                version = db.execute(
+                    """SELECT id FROM instrument_versions WHERE archived_at IS NULL
+                       ORDER BY COALESCE(published_at,0) DESC, id DESC LIMIT 1"""
+                ).fetchone()
+                if not version:
+                    raise APIError("published_instrument_required", 422)
+                row = db.execute(
+                    "SELECT code,content_json FROM dimensions WHERE version_id=? AND code=?",
+                    (version["id"], code),
+                ).fetchone()
+                if not row:
+                    raise APIError("dimension_not_found", 404)
+                try:
+                    content = json.loads(row["content_json"]) if row["content_json"] else {}
+                except (TypeError, ValueError):
+                    content = {}
+                # Only the declared fields are stored, and a field the author
+                # left out is preserved rather than blanked.
+                for field in self.KNOWLEDGE_FIELDS:
+                    if field in data:
+                        content[field] = str(data.get(field) or "").strip()[:4000]
+                db.execute(
+                    "UPDATE dimensions SET content_json=? WHERE version_id=? AND code=?",
+                    (json.dumps(content, ensure_ascii=False, sort_keys=True), version["id"], code),
+                )
+                audit(db, context["id"], "knowledge_content_updated", "dimension", version["id"], {
+                    "code": code,
+                    "fields_written": sorted(field for field in self.KNOWLEDGE_FIELDS if content.get(field)),
+                })
+                db.commit()
+                return self.send_json({"code": code, "content": {
+                    field: content.get(field, "") for field in self.KNOWLEDGE_FIELDS
+                }})
             if method == "GET" and path == "/api/research/codebook":
                 version_id = int((query.get("version_id") or [0])[0] or 0) or db.execute("SELECT id FROM instrument_versions ORDER BY id DESC LIMIT 1").fetchone()[0]
                 rows = db.execute("SELECT code AS variable_name,prompt_ar AS variable_label_ar,prompt_en AS variable_label_en,construct,dimension_code AS dimension,response_type,min_value,max_value,reverse_coded,source,version_id AS instrument_version FROM items WHERE version_id=? ORDER BY sort_order,id", (version_id,)).fetchall()
@@ -2496,8 +2594,10 @@ class API(BaseHTTPRequestHandler):
                 ).fetchall()
                 return self.send_json({"reports": [dict(row) for row in rows]})
             if path == "/api/reports" and method == "POST":
-                self.require_roles(context, {"COMPANY_ADMIN", "CONSULTANT", "SUPER_ADMIN"})
                 assessment_id = int(data.get("assessment_id") or 0)
+                # `_assessment` already refuses an assessment the caller is not
+                # entitled to, and a participant is entitled only to one they
+                # answered. The report of your own assessment is yours.
                 assessment = self._assessment(db, assessment_id, context)
                 if assessment["status"] != "COMPLETED":
                     raise APIError("assessment_not_completed", 409)

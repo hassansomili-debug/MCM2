@@ -1074,6 +1074,94 @@ class PlatformJourneyTests(unittest.TestCase):
                                          "password": "XxPassword2026", "role": "SUPER_ADMIN"},
             token=account, expected=403)["error"])
 
+    def test_registration_adds_depth_without_withholding_the_result(self):
+        """The account must open more, never gate what was already shown."""
+        token, assessment_id = self._completed_direct_assessment("منشأة العمق")
+        anonymous = self.request("GET", f"/api/participant/session/{token}")["result"]
+        # The anonymous participant already receives the complete payload.
+        self.assertTrue(anonymous["scores"]["MCM"]["total"])
+        self.assertEqual(7, len(anonymous["scores"]["MCM"]["dimensions"]))
+        self.assertEqual(5, len(anonymous["scores"]["SMCE"]["dimensions"]))
+        self.assertTrue(anonymous["dashboard"]["roadmap"])
+        self.assertTrue(anonymous["dashboard"]["priorities"])
+
+        account = self.request("POST", "/api/participant/account", {
+            "full_name": "مشارك العمق", "email": "depth@example.test",
+            "password": "DepthParticipant2026", "participant_token": token,
+        }, expected=201)["token"]
+
+        # The signed-in view is the same result, unchanged.
+        signed_in = self.request("GET", f"/api/results/{assessment_id}", token=account)
+        self.assertEqual(anonymous["scores"]["MCM"]["total"], signed_in["scores"]["MCM"]["total"])
+
+        # Every surface the offer names must actually answer.
+        for path in (
+            f"/api/results/{assessment_id}/dimensions/MCM01",
+            f"/api/diagnostics/{assessment_id}",
+            f"/api/gaps/{assessment_id}",
+            f"/api/benchmark/{assessment_id}",
+            "/api/history",
+        ):
+            self.request("GET", path, token=account)
+        # Including the report, which used to be refused to a participant.
+        report = self.request("POST", "/api/reports", {
+            "assessment_id": assessment_id, "report_type": "EXECUTIVE",
+        }, token=account, expected=201)
+        pdf, _ = self.request("GET", report["download_url"], token=account, raw=True)
+        self.assertTrue(pdf.startswith(b"%PDF-1.4"))
+
+        # A participant still reaches only their own assessment.
+        _, other_assessment = self._completed_direct_assessment("منشأة أخرى للعمق")
+        self.assertEqual("assessment_not_found", self.request(
+            "GET", f"/api/results/{other_assessment}", token=account, expected=404)["error"])
+
+    def test_knowledge_base_is_empty_until_the_researcher_writes_it(self):
+        admin = self.login()
+        # The public page shows nothing rather than generated filler.
+        public = self.request("GET", "/api/public/knowledge")
+        self.assertEqual(0, sum(len(items) for items in public["constructs"].values()))
+        self.assertFalse(public["complete"])
+
+        # The authoring view lists every dimension with empty fields.
+        editor = self.request("GET", "/api/research/knowledge", token=admin)
+        self.assertEqual(20, editor["dimension_count"])
+        self.assertEqual(0, editor["written_count"])
+        entry = editor["constructs"]["MCM"][0]
+        self.assertEqual({"definition", "why_it_matters", "improving_looks_like", "indicators"},
+                         set(entry["content"]))
+        self.assertTrue(all(value == "" for value in entry["content"].values()))
+        self.assertFalse(entry["written"])
+
+        saved = self.request("PATCH", "/api/research/knowledge/MCM01", {
+            "definition": "تعريف كتبه الباحث.", "why_it_matters": "سبب أهميته.",
+        }, token=admin)
+        self.assertEqual("تعريف كتبه الباحث.", saved["content"]["definition"])
+        # A field left out of the request is preserved, not blanked.
+        self.request("PATCH", "/api/research/knowledge/MCM01", {"indicators": "مؤشر."}, token=admin)
+        again = self.request("GET", "/api/research/knowledge", token=admin)
+        written = next(item for item in again["constructs"]["MCM"] if item["code"] == "MCM01")
+        self.assertEqual("تعريف كتبه الباحث.", written["content"]["definition"])
+        self.assertEqual("مؤشر.", written["content"]["indicators"])
+        self.assertEqual("", written["content"]["improving_looks_like"])
+
+        # Now the public page shows the written dimension and only that one.
+        public = self.request("GET", "/api/public/knowledge")
+        self.assertEqual(["MCM01"], [item["code"] for item in public["constructs"]["MCM"]])
+
+        # Authoring is the researcher's, not a participant's.
+        self.request("POST", "/api/auth/register", {
+            "name": "شركة بلا تحرير", "email": "no-knowledge@example.test",
+            "password": "NoKnowledge2026", "organization_name": "منشأة بلا تحرير",
+            "service_consent": True,
+        }, expected=201)
+        company = self.login("no-knowledge@example.test", "NoKnowledge2026")
+        self.assertEqual("permission_denied", self.request(
+            "PATCH", "/api/research/knowledge/MCM01", {"definition": "تحرير غير مصرح"},
+            token=company, expected=403)["error"])
+        self.assertEqual("dimension_not_found", self.request(
+            "PATCH", "/api/research/knowledge/NOPE", {"definition": "x"},
+            token=admin, expected=404)["error"])
+
     def test_colleagues_join_one_assessment_through_a_shared_code(self):
         owner = self.login()
         created = self.request("POST", "/api/assessments", {"assessment_type": "FULL"}, owner, 201)

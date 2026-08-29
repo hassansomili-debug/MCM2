@@ -21,7 +21,7 @@ Install `requirements.txt`, configure the administrator secrets locally for the 
 - acquires a PostgreSQL advisory lock;
 - creates the 47-table application schema;
 - seeds instrument `0.4.0`, its 67 items, 20 dimensions and the manager account;
-- records schema version `8`;
+- records schema version `9`;
 - enables RLS and revokes table/sequence access from Supabase `anon` and `authenticated` roles.
 
 The auditable SQL snapshot is `supabase/migrations/202608280001_mcm_platform.sql`; do not apply it separately because the Python migration keeps schema creation, seed validation and version marking in one transaction. Vercel startup never applies DDL; it only checks schema version and seed integrity.
