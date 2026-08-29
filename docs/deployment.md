@@ -19,14 +19,14 @@ Use the Supavisor transaction pooler URL on port `6543` for `MCM_DATABASE_URL`; 
 Install `requirements.txt`, configure the administrator secrets locally for the initial seed, and run `python3 -m mcm.migrate` once. The migration:
 
 - acquires a PostgreSQL advisory lock;
-- creates the 44-table application schema;
+- creates the 46-table application schema;
 - seeds instrument `0.4.0`, its 67 items, 20 dimensions and the manager account;
-- records schema version `4`;
+- records schema version `7`;
 - enables RLS and revokes table/sequence access from Supabase `anon` and `authenticated` roles.
 
 The auditable SQL snapshot is `supabase/migrations/202608280001_mcm_platform.sql`; do not apply it separately because the Python migration keeps schema creation, seed validation and version marking in one transaction. Vercel startup never applies DDL; it only checks schema version and seed integrity.
 
-Use a clean Supabase project for the first production cutover. The migrator is idempotent for schema version 4, but deliberately refuses an older application schema instead of marking a partial `CREATE TABLE IF NOT EXISTS` upgrade as successful. Back up and migrate any pre-v4 PostgreSQL database with an explicit, reviewed upgrade before cutover.
+Use a clean Supabase project for the first production cutover. The migrator is idempotent at the current schema version and upgrades a version 4, 5 or 6 database in place, but deliberately refuses any older application schema instead of marking a partial `CREATE TABLE IF NOT EXISTS` upgrade as successful. Back up and migrate any pre-v4 PostgreSQL database with an explicit, reviewed upgrade before cutover.
 
 Set at least these Vercel Production secrets before redeploying:
 

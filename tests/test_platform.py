@@ -54,6 +54,13 @@ class PlatformJourneyTests(unittest.TestCase):
         cls.server.server_close()
         cls.tempdir.cleanup()
 
+    def setUp(self):
+        # Every test speaks to the server from 127.0.0.1, so the per-IP spam
+        # limiter would otherwise leak across unrelated cases. Production limits
+        # stay as configured; only this shared-address artefact is reset.
+        from mcm import api as api_module
+        api_module._RATE_LIMITS.clear()
+
     def request(self, method, path, body=None, token=None, expected=200, raw=False):
         payload = None if body is None else json.dumps(body).encode()
         headers = {"Content-Type": "application/json"}
@@ -292,6 +299,158 @@ class PlatformJourneyTests(unittest.TestCase):
             self.assertEqual("عشوائي", metadata["previous_label_ar"])
             self.assertEqual(current_label, metadata["new_label_ar"])
             self.assertFalse(metadata["scores_rewritten"])
+
+    def _direct_participant_assessment(self, name="منشأة الاستشارة"):
+        created = self.request("POST", "/api/public/assessments", {
+            "organization_name": name, "sector": "التقنية والاتصالات", "firm_size": "SMALL",
+            "employee_count": 12, "firm_age_years": 3, "business_model": "B2B",
+            "region": "الرياض", "social_platform_count": 3, "social_team_size": 2,
+            "regulated_sector": "NO", "respondent_role": "مالك / مؤسس",
+            "service_consent": True, "research_consent": True,
+        }, expected=201)
+        return created["token"], created["assessment_id"]
+
+    def test_phone_numbers_are_stored_in_one_canonical_shape(self):
+        token, assessment_id = self._direct_participant_assessment("منشأة تطبيع الهاتف")
+        shapes = ["0501234567", "+966 50 123 4567", "00966501234567", "٠٥٠١٢٣٤٥٦٧"]
+        stored = set()
+        for index, shape in enumerate(shapes):
+            result = self.request("POST", "/api/consultations", {
+                "assessment_id": assessment_id, "participant_token": token,
+                "full_name": "مالك المنشأة", "email": "phone-shapes@example.test",
+                "phone_number": shape, "consent_to_contact": True,
+            }, expected=201 if index == 0 else 200)
+            stored.add(result["lead"]["phone_e164"])
+        # Four spellings of one number must never become four rows or four
+        # formats; the later submissions resolve to the same lead.
+        self.assertEqual({"+966501234567"}, stored)
+
+        self.assertEqual("invalid_phone_number", self.request("POST", "/api/consultations", {
+            "assessment_id": assessment_id, "participant_token": token,
+            "full_name": "مالك المنشأة", "email": "bad-phone@example.test",
+            "phone_number": "abc", "consent_to_contact": True,
+        }, expected=422)["error"])
+        self.assertEqual("invalid_email", self.request("POST", "/api/consultations", {
+            "assessment_id": assessment_id, "participant_token": token,
+            "full_name": "مالك المنشأة", "email": "not-an-email",
+            "phone_number": "0501112223", "consent_to_contact": True,
+        }, expected=422)["error"])
+
+    def test_consultation_consent_is_explicit_separate_and_versioned(self):
+        token, assessment_id = self._direct_participant_assessment("منشأة الموافقات")
+        base = {
+            "assessment_id": assessment_id, "participant_token": token,
+            "full_name": "مسؤول التسويق", "email": "consent@example.test",
+            "phone_number": "0555000111",
+        }
+        # Contact consent is the lawful basis; without it nothing is stored.
+        self.assertEqual("contact_consent_required", self.request(
+            "POST", "/api/consultations", dict(base), expected=422)["error"])
+
+        created = self.request("POST", "/api/consultations", dict(
+            base, consent_to_contact=True,
+            consultation_topics=["CUSTOMER_JOURNEY", "FULL_90_DAY_PLAN"],
+            preferred_contact_method="WHATSAPP",
+        ), expected=201)["lead"]
+        # Marketing consent is a separate decision and defaults to off, even
+        # though the participant granted research consent on the assessment.
+        self.assertFalse(created["marketing_consent"])
+        self.assertEqual("CONTACT_CONSENT_1.0", created["contact_consent_version"])
+        self.assertEqual("PRIVACY_NOTICE_1.0", created["privacy_notice_version"])
+        self.assertEqual(["CUSTOMER_JOURNEY", "FULL_90_DAY_PLAN"], created["consultation_topics"])
+
+        self.assertEqual("unsupported_consultation_topic", self.request(
+            "POST", "/api/consultations",
+            dict(base, email="topics@example.test", consent_to_contact=True,
+                 consultation_topics=["ANYTHING"]),
+            expected=422)["error"])
+
+        # Withdrawing consent stops contact and is recorded as an event.
+        withdrawn = self.request("POST", f"/api/consultations/{created['id']}/consent", {
+            "participant_token": token,
+        })
+        self.assertEqual("DO_NOT_CONTACT", withdrawn["status"])
+
+        from mcm import database
+        with database.transaction() as db:
+            events = [row["event_type"] for row in db.execute(
+                "SELECT event_type FROM consultation_lead_events WHERE consultation_lead_id=? ORDER BY id",
+                (created["id"],),
+            )]
+            marketing_at = db.execute(
+                "SELECT marketing_consent,marketing_consent_at FROM consultation_leads WHERE id=?",
+                (created["id"],),
+            ).fetchone()
+        self.assertEqual(["CREATED", "CONSENT_WITHDRAWN"], events)
+        self.assertEqual(0, marketing_at["marketing_consent"])
+        self.assertIsNone(marketing_at["marketing_consent_at"])
+
+    def test_results_stay_available_and_contact_data_never_reaches_research(self):
+        token, assessment_id = self._direct_participant_assessment("منشأة عزل البيانات")
+        session = self.request("GET", f"/api/participant/session/{token}")
+        # The result and its details are reachable without ever submitting a
+        # consultation request.
+        self.assertEqual(67, len(session["items"]))
+
+        self.request("POST", "/api/consultations", {
+            "assessment_id": assessment_id, "participant_token": token,
+            "full_name": "جهة الاتصال", "email": "isolation@example.test",
+            "phone_number": "0533444555", "consent_to_contact": True,
+            "notes": "ملاحظة خاصة بالطلب",
+        }, expected=201)
+
+        admin = self.login()
+        for path in ("/api/research/dataset", "/api/research/summary", "/api/research/statistics"):
+            serialized = json.dumps(self.request("GET", path, token=admin), ensure_ascii=False)
+            for secret in ("isolation@example.test", "+966533444555", "0533444555", "جهة الاتصال"):
+                self.assertNotIn(secret, serialized, f"{secret} leaked into {path}")
+
+        from mcm import database
+        from mcm.exports import build_research_sheets, spss_package
+        with database.transaction() as db:
+            sheets = build_research_sheets(db)
+            package = spss_package(db)
+        flattened = json.dumps(
+            {name: [headers, rows] for name, (headers, rows) in sheets.items()},
+            ensure_ascii=False, default=str,
+        )
+        for secret in ("isolation@example.test", "+966533444555", "جهة الاتصال", "ملاحظة خاصة بالطلب"):
+            self.assertNotIn(secret, flattened, "contact data reached the research sheets")
+            self.assertNotIn(secret.encode(), package, "contact data reached the SPSS package")
+
+    def test_a_participant_cannot_read_another_participants_consultation(self):
+        first_token, first_assessment = self._direct_participant_assessment("منشأة أولى")
+        second_token, _ = self._direct_participant_assessment("منشأة ثانية")
+        lead = self.request("POST", "/api/consultations", {
+            "assessment_id": first_assessment, "participant_token": first_token,
+            "full_name": "صاحب الطلب", "email": "owner@example.test",
+            "phone_number": "0544333222", "consent_to_contact": True,
+        }, expected=201)["lead"]
+
+        self.request("GET", f"/api/consultations/{lead['id']}?participant_token={first_token}")
+        # Another participant's token, and an anonymous caller, are both refused
+        # the same way, without revealing that the lead exists.
+        self.assertEqual("consultation_lead_not_found", self.request(
+            "GET", f"/api/consultations/{lead['id']}?participant_token={second_token}",
+            expected=404)["error"])
+        self.assertEqual("consultation_lead_not_found", self.request(
+            "GET", f"/api/consultations/{lead['id']}", expected=404)["error"])
+        self.assertEqual("consultation_lead_not_found", self.request(
+            "POST", f"/api/consultations/{lead['id']}/consent",
+            {"participant_token": second_token}, expected=404)["error"])
+
+    def test_privacy_notice_is_served_with_versioned_consent_texts(self):
+        notice = self.request("GET", "/api/public/privacy")
+        self.assertEqual("PRIVACY_NOTICE_1.0", notice["version"])
+        self.assertEqual("CONTACT_CONSENT_1.0", notice["consent_texts"]["contact"]["version"])
+        self.assertEqual("MARKETING_CONSENT_1.0", notice["consent_texts"]["marketing"]["version"])
+        self.assertNotEqual(
+            notice["consent_texts"]["contact"]["text_ar"],
+            notice["consent_texts"]["marketing"]["text_ar"],
+        )
+        titles = [section["title_ar"] for section in notice["sections"]]
+        for required in ("البيانات التي نجمعها", "أساس المعالجة", "الاحتفاظ", "حقوقك"):
+            self.assertIn(required, titles)
 
     def test_results_navigation_states_and_dashboard_alias(self):
         client = (Path(__file__).parents[1] / "app.js").read_text(encoding="utf-8")
@@ -568,7 +727,7 @@ class PostgresAdapterTests(unittest.TestCase):
         )
 
     def test_postgres_schema_matches_sqlite_surface(self):
-        self.assertEqual(44, len(POSTGRES_TABLES))
+        self.assertEqual(46, len(POSTGRES_TABLES))
         self.assertEqual(len(POSTGRES_TABLES), len(set(POSTGRES_TABLES)))
         self.assertNotIn("AUTOINCREMENT", POSTGRES_SCHEMA)
         self.assertNotIn(" BLOB", POSTGRES_SCHEMA)

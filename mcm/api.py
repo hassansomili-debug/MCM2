@@ -14,7 +14,30 @@ from urllib.parse import parse_qs, urlparse
 
 from . import config
 from .ai_plans import generate_improvement_plan
-from .database import INTEGRITY_ERRORS, PRODUCT_STATUSES, SCIENTIFIC_STATUSES, assessment_research_eligible, audit, connect, get_config, init_db, now, password_hash, select_for_update, token_hash, verify_password
+from .database import (
+    CONSULTATION_EVENTS,
+    CONSULTATION_STATUSES,
+    CONSULTATION_TOPICS,
+    CONTACT_CONSENT_VERSION,
+    CONTACT_METHODS,
+    INTEGRITY_ERRORS,
+    MARKETING_CONSENT_VERSION,
+    PRIVACY_NOTICE_VERSION,
+    PRODUCT_STATUSES,
+    SCIENTIFIC_STATUSES,
+    PhoneNumberError,
+    assessment_research_eligible,
+    audit,
+    connect,
+    get_config,
+    init_db,
+    normalize_phone_e164,
+    now,
+    password_hash,
+    select_for_update,
+    token_hash,
+    verify_password,
+)
 from .exports import assessment_pdf, build_research_sheets, csv_bytes, fingerprint, research_workbook, spss_package
 from .instruments import InstrumentImportError, parse_docx_base64, validate_tables
 from .scoring import (
@@ -65,6 +88,60 @@ PUBLIC_MODEL = {
             "والتحسين المستمر مع تراكم البيانات والأدلة التطبيقية."
         ),
     ],
+}
+
+
+# The privacy notice is served as data so the version stored with a consent
+# always matches the text that was shown. Three facts are organisational, not
+# technical, and are deliberately left as explicit placeholders rather than
+# invented: inventing a controller identity, a retention period or a contact
+# point would be worse than showing that they are outstanding.
+_PRIVACY_PLACEHOLDER = "[[يحتاج تعبئة من مالك المنصة]]"
+PRIVACY_NOTICE = {
+    "version": PRIVACY_NOTICE_VERSION,
+    "title_ar": "سياسة الخصوصية",
+    "controller_ar": _PRIVACY_PLACEHOLDER,
+    "privacy_contact_ar": _PRIVACY_PLACEHOLDER,
+    "contact_retention_ar": _PRIVACY_PLACEHOLDER,
+    "sections": [
+        {"title_ar": "البيانات التي نجمعها", "body_ar": (
+            "بيانات التقييم: إجابات المقياس وخصائص المنشأة، وتُستخدم لإصدار التشخيص والنتيجة. "
+            "بيانات التواصل: الاسم والبريد ورقم الجوال والمسمى الوظيفي، وتُجمع فقط إذا طلبت استشارة."
+        )},
+        {"title_ar": "أساس المعالجة", "body_ar": (
+            "معالجة الإجابات تستند إلى موافقة الخدمة. حفظ بيانات التواصل يستند إلى موافقة تواصل "
+            "منفصلة وصريحة. إرسال المحتوى المهني يستند إلى موافقة تسويقية ثالثة ومستقلة. "
+            "الموافقة البحثية لا تعني موافقة تواصل، وموافقة التواصل لا تعني موافقة تسويقية."
+        )},
+        {"title_ar": "الفصل بين البيانات", "body_ar": (
+            "لا تدخل بيانات التواصل في احتساب الدرجات ولا في المقارنات المعيارية ولا في مجموعات "
+            "البيانات البحثية ولا في تصديرات SPSS أو Excel. تبقى النتيجة وتفاصيلها وتقريرها "
+            "متاحة كاملة سواء قدمت بيانات تواصل أو لم تقدمها."
+        )},
+        {"title_ar": "الاحتفاظ", "body_ar": f"مدة الاحتفاظ ببيانات التواصل: {_PRIVACY_PLACEHOLDER}. تُحذف أو تُجهَّل بعدها."},
+        {"title_ar": "المشاركة", "body_ar": (
+            "لا تُشارك بيانات التواصل مع أطراف خارجية لأغراض تسويقية. يصل إليها من يملك صلاحية "
+            "معلنة داخل المنصة فقط، وكل وصول مسجَّل في سجل التدقيق."
+        )},
+        {"title_ar": "حقوقك", "body_ar": (
+            "يمكنك الاطلاع على طلبك، وتصحيح بياناتك، وسحب موافقة التواصل، وطلب الحذف. "
+            "سحب الموافقة يوقف التواصل ولا يؤثر على نتيجة التقييم."
+        )},
+        {"title_ar": "جهة الاتصال لطلبات الخصوصية", "body_ar": _PRIVACY_PLACEHOLDER},
+    ],
+    "consent_texts": {
+        "contact": {
+            "version": CONTACT_CONSENT_VERSION,
+            "text_ar": (
+                "أوافق على استخدام بيانات التواصل التي أدخلتها لغرض التواصل معي بشأن طلب "
+                "الاستشارة المتعلق بنتيجة نضج MCM."
+            ),
+        },
+        "marketing": {
+            "version": MARKETING_CONSENT_VERSION,
+            "text_ar": "أرغب في تلقي تحديثات ومحتوى مهني من نضج MCM.",
+        },
+    },
 }
 
 
@@ -344,6 +421,20 @@ class API(BaseHTTPRequestHandler):
             })
         if method == "GET" and path == "/api/public/maturity-levels":
             return self.send_json(self._public_maturity_levels())
+        if method == "GET" and path == "/api/public/privacy":
+            return self.send_json(PRIVACY_NOTICE)
+        if method == "POST" and path == "/api/consultations":
+            # Reachable with a participant session token or an authenticated
+            # user; authorisation is resolved against the assessment itself.
+            return self._create_consultation_lead(data, self.context(required=False))
+        own_lead = re.fullmatch(r"/api/consultations/(\d+)", path)
+        if method == "GET" and own_lead:
+            return self._own_consultation_lead(int(own_lead.group(1)), query, self.context(required=False))
+        withdraw = re.fullmatch(r"/api/consultations/(\d+)/(consent|deletion-request)", path)
+        if method == "POST" and withdraw:
+            return self._consultation_self_service(
+                int(withdraw.group(1)), withdraw.group(2), data, self.context(required=False)
+            )
         if method == "POST" and path == "/api/public/assessments":
             if config.EPHEMERAL_STORAGE:
                 raise APIError("durable_storage_required", 503)
@@ -380,6 +471,266 @@ class API(BaseHTTPRequestHandler):
         if path.startswith("/api/admin"):
             return self._admin(method, path, data, context)
         raise APIError("route_not_found", 404)
+
+    def _create_consultation_lead(self, data: dict, context):
+        """Record an optional consultation request against a visible result.
+
+        Declining this form never affects access to the result, its details, its
+        report or the methodology; nothing here feeds scoring, benchmarks or any
+        research export.
+        """
+        self._rate_limit("consultation_lead", 10, 3600)
+        assessment_id = int(data.get("assessment_id") or 0)
+        if not assessment_id:
+            raise APIError("assessment_id_required", 422)
+        db = connect()
+        try:
+            assessment, participant_id, user_id = self._consultation_authorized_assessment(
+                db, assessment_id, data, context
+            )
+            full_name = str(data.get("full_name") or "").strip()
+            email = _slug_email(data.get("email"))
+            if len(full_name) < 2:
+                raise APIError("full_name_required", 422)
+            if not _valid_email(email):
+                raise APIError("invalid_email", 422)
+            try:
+                phone = normalize_phone_e164(data.get("phone_number") or data.get("phone_e164"))
+            except PhoneNumberError:
+                raise APIError("invalid_phone_number", 422)
+            # Contact consent is the lawful basis for storing these details at
+            # all, so it is required and never inferred from another consent.
+            if not bool(data.get("consent_to_contact")):
+                raise APIError("contact_consent_required", 422)
+            method = str(data.get("preferred_contact_method") or "").strip().upper() or None
+            if method and method not in CONTACT_METHODS:
+                raise APIError("unsupported_contact_method", 422)
+            topics = data.get("consultation_topics") or []
+            if not isinstance(topics, list):
+                raise APIError("invalid_consultation_topics", 422)
+            topics = [str(topic).strip().upper() for topic in topics]
+            if any(topic not in CONSULTATION_TOPICS for topic in topics):
+                raise APIError("unsupported_consultation_topic", 422)
+            # Marketing consent is a separate decision with its own timestamp.
+            # It is never derived from contact consent or research consent.
+            marketing = bool(data.get("marketing_consent"))
+            timestamp = now()
+            idempotency = str(data.get("idempotency_key") or "").strip()[:120] or None
+
+            existing = db.execute(
+                """SELECT * FROM consultation_leads
+                   WHERE deleted_at IS NULL AND (
+                     (idempotency_key IS NOT NULL AND idempotency_key=?)
+                     OR (assessment_id=? AND email=? AND phone_e164=?))
+                   ORDER BY id LIMIT 1""",
+                (idempotency, assessment_id, email, phone),
+            ).fetchone()
+            if existing:
+                # A repeated click returns the request already on file instead
+                # of creating a second lead for the same person.
+                return self.send_json({
+                    "lead": self._consultation_payload(existing, include_contact=True),
+                    "duplicate": True,
+                }, 200)
+
+            lead_id = db.execute(
+                """INSERT INTO consultation_leads(
+                     assessment_id,organization_id,participant_id,participant_user_id,
+                     full_name,organization_name,job_title,email,phone_e164,
+                     preferred_contact_method,preferred_contact_time,consultation_topics,notes,
+                     consent_to_contact,contact_consent_version,contact_consent_at,
+                     marketing_consent,marketing_consent_at,privacy_notice_version,
+                     source,status,idempotency_key,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,'NEW',?,?,?)""",
+                (
+                    assessment_id, assessment["organization_id"], participant_id, user_id,
+                    full_name[:160],
+                    (str(data.get("organization_name") or "").strip() or None),
+                    (str(data.get("job_title") or "").strip() or None),
+                    email, phone, method,
+                    (str(data.get("preferred_contact_time") or "").strip() or None),
+                    json.dumps(topics, ensure_ascii=False),
+                    (str(data.get("notes") or "").strip()[:2000] or None),
+                    CONTACT_CONSENT_VERSION, timestamp,
+                    int(marketing), (timestamp if marketing else None),
+                    PRIVACY_NOTICE_VERSION,
+                    str(data.get("source") or "ASSESSMENT_RESULTS").strip().upper()[:40],
+                    idempotency, timestamp, timestamp,
+                ),
+            ).lastrowid
+            db.execute(
+                """INSERT INTO consultation_lead_events(consultation_lead_id,event_type,new_status,actor_user_id,created_at)
+                   VALUES (?,'CREATED','NEW',?,?)""",
+                (lead_id, user_id, timestamp),
+            )
+            # Notify the people allowed to act on it. The notification carries
+            # no contact details, only the reference.
+            for row in db.execute(
+                "SELECT DISTINCT user_id FROM memberships WHERE role IN ('SUPER_ADMIN','CONSULTANT')"
+            ):
+                db.execute(
+                    "INSERT INTO notifications(user_id,type,title,body,target_url,created_at) VALUES (?,?,?,?,?,?)",
+                    (row["user_id"], "CONSULTATION_LEAD", "طلب استشارة جديد",
+                     f"وصل طلب استشارة مرتبط بالتقييم #{assessment_id}.", "#consultations", timestamp),
+                )
+            # The audit entry records that contact data was created, not the
+            # data itself; emails and phone numbers never enter the log.
+            audit(db, user_id, "consultation_lead_created", "consultation_lead", lead_id, {
+                "assessment_id": assessment_id,
+                "contact_consent_version": CONTACT_CONSENT_VERSION,
+                "marketing_consent": marketing,
+                "marketing_consent_version": MARKETING_CONSENT_VERSION if marketing else None,
+                "privacy_notice_version": PRIVACY_NOTICE_VERSION,
+            })
+            db.commit()
+            created = db.execute("SELECT * FROM consultation_leads WHERE id=?", (lead_id,)).fetchone()
+            return self.send_json({
+                "lead": self._consultation_payload(created, include_contact=True),
+                "duplicate": False,
+                "confirmation_ar": "تم استلام طلب الاستشارة، وسيتواصل معك الفريق وفق وسيلة التواصل التي اخترتها.",
+            }, 201)
+        finally:
+            db.close()
+
+    def _own_lead(self, db, lead_id: int, proof: dict, context):
+        """Resolve a lead the caller personally owns, or refuse.
+
+        Ownership is proved the same way the lead was created: the participant
+        session token issued for that assessment, or an authenticated user who
+        submitted it. Belonging to the same organisation is not enough — another
+        participant's consultation request is their personal data, not the
+        company's.
+        """
+        lead = db.execute(
+            "SELECT * FROM consultation_leads WHERE id=? AND deleted_at IS NULL", (lead_id,)
+        ).fetchone()
+        if not lead:
+            raise APIError("consultation_lead_not_found", 404)
+        token = str(proof.get("participant_token") or "").strip()
+        if token:
+            session = db.execute(
+                "SELECT participant_id,assessment_id FROM participant_sessions WHERE token=? AND expires_at>?",
+                (token_hash(token), now()),
+            ).fetchone()
+            if session and int(session["assessment_id"]) == int(lead["assessment_id"]):
+                return lead
+            raise APIError("consultation_lead_not_found", 404)
+        if context and lead["participant_user_id"] and int(lead["participant_user_id"]) == int(context["id"]):
+            return lead
+        raise APIError("consultation_lead_not_found", 404)
+
+    def _own_consultation_lead(self, lead_id: int, query: dict, context):
+        db = connect()
+        try:
+            proof = {"participant_token": (query.get("participant_token") or [""])[0]}
+            lead = self._own_lead(db, lead_id, proof, context)
+            return self.send_json({"lead": self._consultation_payload(lead, include_contact=True)})
+        finally:
+            db.close()
+
+    def _consultation_self_service(self, lead_id: int, action: str, data: dict, context):
+        """Let the person who submitted a lead withdraw consent or ask for deletion.
+
+        Withdrawing consent stops contact immediately and never touches the
+        assessment or its result.
+        """
+        db = connect()
+        try:
+            lead = self._own_lead(db, lead_id, data, context)
+            timestamp = now()
+            if action == "consent":
+                db.execute(
+                    """UPDATE consultation_leads
+                       SET consent_to_contact=0,marketing_consent=0,marketing_consent_at=NULL,
+                           status='DO_NOT_CONTACT',updated_at=?
+                       WHERE id=?""",
+                    (timestamp, lead_id),
+                )
+                event, new_status = "CONSENT_WITHDRAWN", "DO_NOT_CONTACT"
+                message = "سُحبت موافقة التواصل، ولن يجري التواصل معك بشأن هذا الطلب."
+            else:
+                db.execute(
+                    "UPDATE consultation_leads SET status='DO_NOT_CONTACT',updated_at=? WHERE id=?",
+                    (timestamp, lead_id),
+                )
+                event, new_status = "DELETION_REQUESTED", "DO_NOT_CONTACT"
+                message = "سُجّل طلب الحذف، وسيُنفَّذ وفق سياسة الاحتفاظ المعلنة."
+            db.execute(
+                """INSERT INTO consultation_lead_events(consultation_lead_id,event_type,previous_status,new_status,actor_user_id,created_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (lead_id, event, lead["status"], new_status, (context or {}).get("id"), timestamp),
+            )
+            audit(db, (context or {}).get("id"), f"consultation_{action.replace('-', '_')}", "consultation_lead", lead_id, {
+                "previous_status": lead["status"], "new_status": new_status,
+            })
+            db.commit()
+            return self.send_json({"lead_id": lead_id, "status": new_status, "message_ar": message})
+        finally:
+            db.close()
+
+    def _consultation_authorized_assessment(self, db, assessment_id: int, data: dict, context):
+        """Confirm the caller may see this assessment before accepting a lead.
+
+        A lead is only ever attached to a result the requester is already
+        entitled to view: an anonymous participant proves it with the session
+        token they were issued, an authenticated user through the tenant check.
+        """
+        assessment = db.execute("SELECT * FROM assessments WHERE id=?", (assessment_id,)).fetchone()
+        if not assessment:
+            raise APIError("assessment_not_found", 404)
+        token = str(data.get("participant_token") or "").strip()
+        if token:
+            session = db.execute(
+                """SELECT ps.participant_id,ps.assessment_id FROM participant_sessions ps
+                   WHERE ps.token=? AND ps.expires_at>?""",
+                (token_hash(token), now()),
+            ).fetchone()
+            if not session or int(session["assessment_id"]) != assessment_id:
+                raise APIError("participant_session_invalid", 403)
+            return assessment, session["participant_id"], None
+        if not context:
+            raise APIError("authentication_required", 401)
+        if int(assessment["organization_id"]) != int(context["organization_id"]):
+            raise APIError("assessment_not_found", 404)
+        return assessment, None, context["id"]
+
+    def _consultation_payload(self, row, *, include_contact: bool) -> dict:
+        """Shape a lead for the wire.
+
+        Contact details are opt-in per caller. Every reader that is not entitled
+        to personal data receives the same row without it, so a missing check at
+        one call site cannot leak an email or a phone number.
+        """
+        payload = {
+            "id": row["id"],
+            "assessment_id": row["assessment_id"],
+            "organization_id": row["organization_id"],
+            "status": row["status"],
+            "source": row["source"],
+            "consultation_topics": json.loads(row["consultation_topics"] or "[]"),
+            "preferred_contact_method": row["preferred_contact_method"],
+            "preferred_contact_time": row["preferred_contact_time"],
+            "assigned_consultant_id": row["assigned_consultant_id"],
+            "first_contacted_at": row["first_contacted_at"],
+            "scheduled_at": row["scheduled_at"],
+            "closed_at": row["closed_at"],
+            "closure_reason": row["closure_reason"],
+            "marketing_consent": bool(row["marketing_consent"]),
+            "contact_consent_version": row["contact_consent_version"],
+            "privacy_notice_version": row["privacy_notice_version"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+        if include_contact:
+            payload.update({
+                "full_name": row["full_name"],
+                "organization_name": row["organization_name"],
+                "job_title": row["job_title"],
+                "email": row["email"],
+                "phone_e164": row["phone_e164"],
+                "notes": row["notes"],
+            })
+        return payload
 
     def _public_maturity_levels(self) -> dict:
         """Serve the five stages for the public stage section and methodology page.

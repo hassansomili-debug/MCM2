@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import sqlite3
 import time
@@ -21,12 +22,32 @@ except ImportError:  # SQLite-only local development does not need psycopg insta
 INTEGRITY_ERRORS = (sqlite3.IntegrityError,) + (
     (PostgresIntegrityError,) if PostgresIntegrityError is not None else ()
 )
-REQUIRED_SCHEMA_VERSION = 6
+REQUIRED_SCHEMA_VERSION = 7
 # Schema versions this release can upgrade in place. Version 4 differs from 5
 # only by additive columns and a stage-label revision, both of which are
 # applied and verified by migrate_postgres(). Any other older version is still
 # refused rather than silently marked complete.
-SUPPORTED_UPGRADE_VERSIONS = frozenset({4, 5})
+SUPPORTED_UPGRADE_VERSIONS = frozenset({4, 5, 6})
+
+CONSULTATION_STATUSES = (
+    "NEW", "ASSIGNED", "CONTACTED", "QUALIFIED",
+    "CONSULTATION_SCHEDULED", "CONVERTED", "CLOSED", "DO_NOT_CONTACT",
+)
+CONSULTATION_EVENTS = (
+    "CREATED", "ASSIGNED", "CONTACT_ATTEMPTED", "CONTACTED", "QUALIFIED",
+    "SCHEDULED", "CONVERTED", "CLOSED", "CONSENT_WITHDRAWN", "DELETION_REQUESTED",
+)
+CONSULTATION_TOPICS = (
+    "STRATEGY_AND_GOVERNANCE", "STAKEHOLDER_COMMUNICATION", "INFORMATION_GOVERNANCE",
+    "CUSTOMER_JOURNEY", "PROMISE_EXPERIENCE_ALIGNMENT", "MEASUREMENT_AND_LEARNING",
+    "CAPABILITY_SUSTAINABILITY", "FULL_90_DAY_PLAN", "OTHER",
+)
+CONTACT_METHODS = ("PHONE", "EMAIL", "WHATSAPP", "VIDEO_MEETING")
+# Stored with every lead so a later change to the wording can never be applied
+# retroactively to a consent someone already gave.
+CONTACT_CONSENT_VERSION = "CONTACT_CONSENT_1.0"
+MARKETING_CONSENT_VERSION = "MARKETING_CONSENT_1.0"
+PRIVACY_NOTICE_VERSION = "PRIVACY_NOTICE_1.0"
 
 # Product lifecycle is an operational decision; scientific status is an
 # evidentiary claim. They are deliberately separate so that publishing a
@@ -650,6 +671,65 @@ CREATE TABLE IF NOT EXISTS system_configuration (
   updated_by INTEGER,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS consultation_leads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  assessment_id INTEGER NOT NULL,
+  organization_id INTEGER,
+  participant_id INTEGER,
+  participant_user_id INTEGER,
+  full_name TEXT NOT NULL,
+  organization_name TEXT,
+  job_title TEXT,
+  email TEXT NOT NULL,
+  phone_e164 TEXT NOT NULL,
+  preferred_contact_method TEXT,
+  preferred_contact_time TEXT,
+  consultation_topics TEXT NOT NULL DEFAULT '[]',
+  notes TEXT,
+  consent_to_contact INTEGER NOT NULL,
+  contact_consent_version TEXT NOT NULL,
+  contact_consent_at INTEGER NOT NULL,
+  marketing_consent INTEGER NOT NULL DEFAULT 0,
+  marketing_consent_at INTEGER,
+  privacy_notice_version TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'ASSESSMENT_RESULTS',
+  status TEXT NOT NULL DEFAULT 'NEW',
+  assigned_consultant_id INTEGER,
+  first_contacted_at INTEGER,
+  scheduled_at INTEGER,
+  closed_at INTEGER,
+  closure_reason TEXT,
+  idempotency_key TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  UNIQUE(assessment_id, email, phone_e164),
+  UNIQUE(idempotency_key),
+  FOREIGN KEY(assessment_id) REFERENCES assessments(id),
+  FOREIGN KEY(organization_id) REFERENCES organizations(id),
+  FOREIGN KEY(participant_id) REFERENCES participants(id),
+  FOREIGN KEY(participant_user_id) REFERENCES users(id),
+  FOREIGN KEY(assigned_consultant_id) REFERENCES users(id)
+);
+CREATE TABLE IF NOT EXISTS consultation_lead_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  consultation_lead_id INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  previous_status TEXT,
+  new_status TEXT,
+  note TEXT,
+  actor_user_id INTEGER,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(consultation_lead_id) REFERENCES consultation_leads(id),
+  FOREIGN KEY(actor_user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_consultation_leads_assessment ON consultation_leads(assessment_id);
+CREATE INDEX IF NOT EXISTS idx_consultation_leads_org ON consultation_leads(organization_id);
+CREATE INDEX IF NOT EXISTS idx_consultation_leads_status ON consultation_leads(status, created_at);
+CREATE INDEX IF NOT EXISTS idx_consultation_leads_consultant ON consultation_leads(assigned_consultant_id, status);
+CREATE INDEX IF NOT EXISTS idx_consultation_leads_email ON consultation_leads(email);
+CREATE INDEX IF NOT EXISTS idx_consultation_leads_phone ON consultation_leads(phone_e164);
+CREATE INDEX IF NOT EXISTS idx_consultation_lead_events_lead ON consultation_lead_events(consultation_lead_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_memberships_org ON memberships(organization_id, role);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_expiry ON sessions(user_id, expires_at);
 CREATE INDEX IF NOT EXISTS idx_assessments_org_status ON assessments(organization_id, status, created_at);
@@ -1133,6 +1213,46 @@ def _ensure_seed_data(db: sqlite3.Connection, *, reset_admin_password: bool = Fa
         )
 
 
+class PhoneNumberError(ValueError):
+    """Raised when a supplied phone number cannot be stored in E.164 form."""
+
+
+def normalize_phone_e164(raw: str, default_country_code: str = "966") -> str:
+    """Return a single canonical E.164 string, or refuse the input.
+
+    One number must never be stored in two shapes, so every accepted value is
+    reduced to `+` followed by digits. Local `0` trunk prefixes and `00`
+    international prefixes are resolved against the configured default country
+    rather than guessed per call site.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        raise PhoneNumberError("phone_required")
+    # Arabic-Indic digits are common in this interface; fold them to ASCII
+    # before parsing so an Arabic keyboard entry is not silently rejected.
+    folded = "".join(
+        str(ord(char) - 0x0660) if "٠" <= char <= "٩"
+        else str(ord(char) - 0x06F0) if "۰" <= char <= "۹"
+        else char
+        for char in text
+    )
+    explicit_plus = folded.startswith("+")
+    digits = re.sub(r"\D", "", folded)
+    if not digits:
+        raise PhoneNumberError("phone_invalid")
+    if not explicit_plus:
+        if digits.startswith("00"):
+            digits = digits[2:]
+        elif digits.startswith("0"):
+            digits = default_country_code + digits.lstrip("0")
+        elif not digits.startswith(default_country_code):
+            digits = default_country_code + digits
+    # E.164 allows at most 15 digits; a country code is at least one.
+    if not 8 <= len(digits) <= 15:
+        raise PhoneNumberError("phone_invalid")
+    return "+" + digits
+
+
 def _backfill_version_statuses(db: sqlite3.Connection) -> None:
     """Derive product status from the operational lifecycle, once, per version.
 
@@ -1218,6 +1338,7 @@ def init_db() -> None:
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (4,'supabase_postgresql_adapter_and_data_integrity',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (5,'maturity_stage_labels_and_public_stage_content',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (6,'separate_product_and_scientific_status',?)", (now(),))
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (7,'consultation_leads_and_consent_versioning',?)", (now(),))
         db.execute("PRAGMA optimize")
         db.commit()
     finally:
@@ -1296,6 +1417,7 @@ def migrate_postgres() -> dict[str, int]:
             (4, "supabase_postgresql_adapter_and_data_integrity"),
             (5, "maturity_stage_labels_and_public_stage_content"),
             (6, "separate_product_and_scientific_status"),
+            (7, "consultation_leads_and_consent_versioning"),
         )
         for version, name in migration_rows:
             db.execute(
