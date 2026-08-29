@@ -726,6 +726,51 @@ class PostgresAdapterTests(unittest.TestCase):
             connection_security_options(normalize_database_url(f"{base}?supa=base-pooler.x")),
         )
 
+    def test_every_generated_id_table_returns_its_id_on_postgres(self):
+        """Guard the trap that broke consultation lead creation.
+
+        A table with a generated id that is missing from IDENTITY_TABLES works
+        on SQLite and returns lastrowid=None on PostgreSQL, surfacing only as a
+        foreign-key violation in a later statement. The set is derived from the
+        schema; this asserts the derivation actually covers every such table.
+        """
+        from mcm.database import SCHEMA
+        from mcm.postgres import IDENTITY_TABLES, identity_tables_from_schema
+
+        derived = identity_tables_from_schema(SCHEMA)
+        self.assertEqual(derived, set(IDENTITY_TABLES))
+        for table in ("consultation_leads", "consultation_lead_events", "assessments", "users"):
+            self.assertIn(table, IDENTITY_TABLES)
+            query, returns_id = postgres_sql(f"INSERT INTO {table}(x) VALUES (?)")
+            self.assertTrue(returns_id, f"{table} must return its generated id")
+            self.assertTrue(query.endswith("RETURNING id"))
+
+    def test_client_script_is_syntactically_valid(self):
+        """Parse app.js with a real JavaScript engine.
+
+        The project has no Node toolchain, so a broken client would otherwise
+        only surface in a browser. macOS ships a JS engine through osascript;
+        `new Function(source)` parses without executing. Where no engine is
+        available the check skips rather than giving false assurance.
+        """
+        import shutil
+        import subprocess
+
+        if not shutil.which("osascript"):
+            self.skipTest("no JavaScript engine available on this platform")
+        client = Path(__file__).resolve().parents[1] / "app.js"
+        script = (
+            "ObjC.import('Foundation');\n"
+            f"var src = ObjC.unwrap($.NSString.stringWithContentsOfFileEncodingError('{client}', $.NSUTF8StringEncoding, null));\n"
+            "try {{ new Function(src); 'OK'; }} catch (e) {{ 'ERROR: ' + e.message; }}"
+        ).replace("{{", "{").replace("}}", "}")
+        completed = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-e", script],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual("OK", completed.stdout.strip(), completed.stdout)
+
     def test_postgres_schema_matches_sqlite_surface(self):
         self.assertEqual(46, len(POSTGRES_TABLES))
         self.assertEqual(len(POSTGRES_TABLES), len(set(POSTGRES_TABLES)))

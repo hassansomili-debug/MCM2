@@ -10,7 +10,13 @@ from contextlib import contextmanager
 from typing import Any
 
 from . import config
-from .postgres import connect_postgres, postgres_schema, schema_table_names
+from .postgres import (
+    connect_postgres,
+    identity_tables_from_schema,
+    postgres_schema,
+    register_identity_tables,
+    schema_table_names,
+)
 
 
 try:
@@ -745,6 +751,10 @@ CREATE INDEX IF NOT EXISTS idx_invitations_token_status ON invitations(token, st
 CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity, entity_id, created_at);
 """
+
+# Keep the identity-table set in step with the schema, so a new table never
+# silently loses its RETURNING id on PostgreSQL.
+register_identity_tables(identity_tables_from_schema(SCHEMA))
 
 POSTGRES_SCHEMA = postgres_schema(SCHEMA)
 POSTGRES_TABLES = tuple(schema_table_names(POSTGRES_SCHEMA))

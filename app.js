@@ -13,6 +13,7 @@ const state = {
   importPreview: null,
   importPayload: null,
   maturity: null,
+  privacyNotice: null,
 };
 
 const appView = document.querySelector('#app-view');
@@ -47,6 +48,15 @@ const errorLabels = {
   invalid_demographics: 'تحقق من عدد الموظفين وعمر المنشأة وحجم فريق التواصل.',
   business_model_required: 'اختر نموذج أعمال المنشأة.', regulated_sector_required: 'حدد ما إذا كان القطاع منظمًا رقابيًا.',
   platform_not_ready: 'المنصة قيد التهيئة؛ حاول بعد قليل.', durable_storage_required: 'التقييم المباشر متوقف مؤقتًا حتى يتم ربط قاعدة بيانات دائمة. تواصل مع مسؤول المنصة.',
+  contact_consent_required: 'يلزم إقرار موافقة التواصل لإرسال الطلب.',
+  invalid_phone_number: 'تحقق من رقم الجوال؛ استخدم صيغة مثل 05xxxxxxxx أو +9665xxxxxxxx.',
+  full_name_required: 'أدخل الاسم الكامل.',
+  unsupported_contact_method: 'وسيلة التواصل المختارة غير مدعومة.',
+  unsupported_consultation_topic: 'أحد محاور الاستشارة غير مدعوم.',
+  invalid_consultation_topics: 'تعذر قراءة محاور الاستشارة.',
+  consultation_lead_not_found: 'الطلب غير متاح لهذا الحساب.',
+  assessment_id_required: 'تعذر ربط الطلب بالتقييم.',
+  participant_session_invalid: 'انتهت جلسة المشارك؛ افتح النتيجة من جديد.',
 };
 
 function e(value) {
@@ -162,7 +172,7 @@ function applyShell() {
   count.textContent = state.me.unread_notifications || 0; count.hidden = !state.me.unread_notifications;
 }
 
-const publicRoutes = new Set(['landing', 'participant-start', 'login', 'participant', 'participant-assessment', 'forgot', 'reset']);
+const publicRoutes = new Set(['landing', 'participant-start', 'login', 'participant', 'participant-assessment', 'forgot', 'reset', 'privacy']);
 const researchRoutes = new Set(['research', 'dataset', 'instruments', 'instrument', 'data-quality', 'statistics', 'exports']);
 async function router() {
   const request = ++state.routeRequest;
@@ -185,10 +195,10 @@ async function router() {
   if (researchRoutes.has(route.parts[0]) && !['RESEARCHER','SUPER_ADMIN'].includes(state.me?.user?.role)) return navigate('overview');
   if (route.parts[0] === 'admin' && state.me?.user?.role !== 'SUPER_ADMIN') return navigate('overview');
   if (route.parts[0] === 'participants' && !canManageAssessments()) return navigate('overview');
-  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون',participant:'دخول المشارك','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة'};
+  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',privacy:'سياسة الخصوصية',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون',participant:'دخول المشارك','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة'};
   document.querySelector('#page-label').textContent = labels[route.parts[0]] || 'مقياس النضج الاتصالي التسويقي';
   if (route.parts[0] === 'dashboard') return navigate('results/latest');
-  const handlers = {landing:renderLanding,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,participant:renderParticipant,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin};
+  const handlers = {landing:renderLanding,privacy:renderPrivacy,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,participant:renderParticipant,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin};
   const handler = handlers[route.parts[0]];
   if (!handler) { appView.innerHTML = emptyState('الصفحة غير موجودة', 'تحقق من الرابط أو عد إلى مساحة العمل.', '<a class="primary-button" href="#overview">العودة للرئيسية</a>'); return; }
   try { await handler(route); if (request === state.routeRequest) appView.focus({preventScroll:true}); }
@@ -391,6 +401,86 @@ function roadmapMeta(item) {
   ].filter(Boolean).join(' · ');
 }
 
+// The consultation invitation is rendered after the complete result, never
+// before it and never in place of it. Declining changes nothing: the result,
+// its detail, its report and the methodology stay open either way.
+function consultationCta(assessmentId) {
+  if (!assessmentId) return '';
+  return `<section class="card consultation-cta" id="consultation-cta">
+    <div>
+      <span class="dashboard-kicker teal">الخطوة الاختيارية التالية</span>
+      <h2>هل ترغب في تطوير مستوى النضج الاتصالي في منشأتك؟</h2>
+      <p>يمكنك طلب جلسة استشارية لمناقشة نتائج منشأتك، وتحديد الأولويات، وبناء خطة عملية لتطوير النضج الاتصالي التسويقي.</p>
+      <small class="consultation-note">نتيجتك وتقريرها متاحان كاملين سواء طلبت الاستشارة أو لم تطلبها.</small>
+    </div>
+    <div class="button-row">
+      <button class="primary-button" data-action="consultation-open" data-assessment="${e(String(assessmentId))}" type="button">اطلب استشارة</button>
+      <button class="secondary-button" data-action="consultation-dismiss" type="button">ليس الآن</button>
+    </div>
+  </section>`;
+}
+
+async function consultationForm(assessmentId) {
+  const notice = await loadPrivacyNotice();
+  const topics = [
+    ['STRATEGY_AND_GOVERNANCE','الاستراتيجية والحوكمة'],
+    ['STAKEHOLDER_COMMUNICATION','التواصل مع أصحاب المصلحة'],
+    ['INFORMATION_GOVERNANCE','حوكمة المعلومات'],
+    ['CUSTOMER_JOURNEY','رحلة العميل'],
+    ['PROMISE_EXPERIENCE_ALIGNMENT','مواءمة الوعد والتجربة'],
+    ['MEASUREMENT_AND_LEARNING','القياس والتعلم'],
+    ['CAPABILITY_SUSTAINABILITY','استدامة القدرات'],
+    ['FULL_90_DAY_PLAN','خطة 90 يومًا كاملة'],
+    ['OTHER','موضوع آخر'],
+  ];
+  const methods = [['PHONE','اتصال هاتفي'],['EMAIL','بريد إلكتروني'],['WHATSAPP','واتساب'],['VIDEO_MEETING','اجتماع مرئي']];
+  const contactText = notice?.consent_texts?.contact?.text_ar || '';
+  const marketingText = notice?.consent_texts?.marketing?.text_ar || '';
+  openDialog(`<div class="consultation-form-wrap">
+    <h2 id="dialog-title">طلب استشارة</h2>
+    <p>الحقول المعلّمة مطلوبة. لن تُستخدم بيانات التواصل في احتساب أي درجة أو في المقارنات البحثية.</p>
+    <form id="consultation-form" class="form-grid">
+      <input type="hidden" name="assessment_id" value="${e(String(assessmentId))}">
+      <label class="field"><span>الاسم الكامل *</span><input name="full_name" required minlength="2" maxlength="160" autocomplete="name"></label>
+      <label class="field"><span>البريد الإلكتروني *</span><input name="email" type="email" required autocomplete="email"></label>
+      <label class="field"><span>رقم الجوال *</span><input name="phone_number" required inputmode="tel" autocomplete="tel" placeholder="05xxxxxxxx"></label>
+      <label class="field"><span>اسم المنشأة</span><input name="organization_name" maxlength="160"></label>
+      <label class="field"><span>المسمى الوظيفي</span><input name="job_title" maxlength="120"></label>
+      <label class="field"><span>وسيلة التواصل المفضلة</span><select name="preferred_contact_method"><option value="">بلا تفضيل</option>${methods.map(([value,label])=>`<option value="${value}">${e(label)}</option>`).join('')}</select></label>
+      <label class="field"><span>الوقت المفضل للتواصل</span><input name="preferred_contact_time" maxlength="120" placeholder="مثال: صباحًا بين 9 و11"></label>
+      <fieldset class="field full consultation-topics"><legend>محاور الاستشارة</legend><div class="topic-grid">${topics.map(([value,label])=>`<label class="checkbox-field"><input type="checkbox" name="consultation_topics" value="${value}"><span>${e(label)}</span></label>`).join('')}</div></fieldset>
+      <label class="field full"><span>ملاحظات</span><textarea name="notes" rows="3" maxlength="2000"></textarea></label>
+      <label class="checkbox-field full"><input name="consent_to_contact" type="checkbox" required><span>${e(contactText)} <a href="#privacy" target="_blank" rel="noopener">سياسة الخصوصية</a></span></label>
+      <label class="checkbox-field full"><input name="marketing_consent" type="checkbox"><span>${e(marketingText)}</span></label>
+      <div class="form-error full" hidden></div>
+      <button class="primary-button full" type="submit">إرسال الطلب</button>
+    </form>
+  </div>`);
+}
+
+async function loadPrivacyNotice() {
+  if (state.privacyNotice) return state.privacyNotice;
+  try { state.privacyNotice = await api('/api/public/privacy'); }
+  catch { state.privacyNotice = null; }
+  return state.privacyNotice;
+}
+
+async function renderPrivacy() {
+  state.publicPage = true; applyShell();
+  const notice = await loadPrivacyNotice();
+  if (!notice) { appView.innerHTML = `<div class="page">${errorState({code:'unavailable'})}</div>`; return; }
+  const pending = value => value && value.startsWith('[[')
+    ? `<em class="privacy-pending">${e(value)}</em>` : e(value || '—');
+  appView.innerHTML = `<div class="landing-page">${publicNav()}<main><div class="page privacy-page">
+    ${pageHeading('الشفافية', notice.title_ar, `الإصدار ${e(notice.version)}`)}
+    <section class="panel"><div class="pill-list">
+      <span>الجهة المتحكمة: ${pending(notice.controller_ar)}</span>
+      <span>جهة طلبات الخصوصية: ${pending(notice.privacy_contact_ar)}</span>
+    </div></section>
+    ${notice.sections.map(section=>`<section class="panel"><h2>${e(section.title_ar)}</h2><p>${section.body_ar.includes('[[') ? pending(section.body_ar) : e(section.body_ar)}</p></section>`).join('')}
+  </div></main></div>`;
+}
+
 function renderPublicResult(result) {
   state.publicPage = true; applyShell();
   const scores = result.scores || {}; const mcm = scores.MCM || {dimensions:[]}; const smce = scores.SMCE || {dimensions:[]};
@@ -424,7 +514,7 @@ function renderPublicResult(result) {
   const timelineLabels = {'0-30':['الآن','أول 30 يومًا'],'31-90':['بعدها','من 31 إلى 90 يومًا'],'3-6':['ترسيخ','من 3 إلى 6 أشهر']};
   const timeline = Object.entries(timelineLabels).map(([key,[kicker,label]])=>`<section><header><small>${kicker}</small><h3>${label}</h3></header><div>${roadmap[key].slice(0,4).map(item=>`<article><b>${e(item.title || item.problem || dashboardName(item))}</b>${item.description || item.action ? `<p>${e(item.description || item.action)}</p>` : ''}${roadmapMeta(item) ? `<span>${e(roadmapMeta(item))}</span>` : ''}</article>`).join('') || '<p class="dashboard-empty">لا توجد إجراءات مقررة في هذا الأفق.</p>'}</div></section>`).join('');
   const insightCards = (items,tone,empty) => items.length ? items.map(item=>`<article class="insight-item ${tone}"><span>${e(item.code || item.dimension_code || '')}</span><h3>${e(dashboardName(item))}</h3><strong>${number(dashboardScore(item),1)}<small>/100</small></strong>${item.interpretation || item.reason ? `<p>${e(item.interpretation || item.reason)}</p>` : ''}</article>`).join('') : `<p class="dashboard-empty">${e(empty)}</p>`;
-  appView.innerHTML = `<div class="public-result-page dashboard-result">${publicNav()}<main><section class="result-hero dashboard-hero"><div><span>اكتمل مقياس النضج الاتصالي التسويقي</span><h1>تصنيف منشأتك: <i>${e(currentStage.label_ar || 'غير متاح')}</i></h1><p>${e(summary)}</p></div><div class="result-score-cards"><article><small>النضج MCM</small><strong>${number(mcmTotal,1)}</strong><span>/100</span></article><article><small>الكفاءة SMCE</small><strong>${number(smceTotal,1)}</strong><span>/100</span></article><article><small>الفارق بين الكفاءة والنضج</small><strong>${Number(efficiencyGap || 0) > 0 ? '+' : ''}${number(efficiencyGap,1)}</strong><span>نقطة</span></article></div></section><section class="panel maturity-dashboard"><div class="card-title"><div><h2>رحلة النضج والخطوة التالية</h2><p>المرحلة الحالية مميزة، والحدود تشخيصية أولية قيد التحقق.</p></div><div class="next-stage-callout"><small>الفجوة إلى ${e(nextLabel)}</small><strong>${nextGap > 0 ? `${number(nextGap,1)} نقطة` : 'أنت في المرحلة الأعلى'}</strong></div></div><div class="maturity-stages compact">${stages.map(stage=>`<div class="${Number(stage.level_order) === currentOrder ? 'active':''}"><b>${number(stage.level_order)}</b><span>${e(stage.label_ar)}</span></div>`).join('')}</div></section><section class="dashboard-grid"><article class="card dashboard-panel radar-panel"><div class="card-title"><div><span class="dashboard-kicker">بصمة القدرة المؤسسية</span><h2>أبعاد النضج السبعة MCM</h2><p>كل محور يمثل درجة بُعد مستقلة من 100.</p></div></div>${radarChart(mcmDimensions)}</article><article class="card dashboard-panel smce-panel"><div class="card-title"><div><span class="dashboard-kicker teal">النتيجة الاتصالية</span><h2>كفاءة التواصل SMCE</h2><p>قراءة مستقلة للأداء الاتصالي المرصود.</p></div></div>${scoreProfile(smceDimensions,'لا تتوفر درجات SMCE لهذه الحالة.','teal')}<div class="relationship-compact"><b>MCM</b><span>أثر إيجابي مقترح ←</span><b>SMCE</b><p>${e(relation.interpretation_ar || '')}</p></div></article></section><section class="dashboard-grid context-outcomes"><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker">جاهزية التنفيذ</span><h2>الممكنات التنظيمية</h2><p>تفسر قدرة المنشأة على التنفيذ ولا تدخل في مقام درجة MCM.</p></div></div>${scoreProfile(enablers,'تظهر الممكنات هنا عند احتساب بنود القيادة والكفاءات والتقنية والبيانات.','navy')}</article><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker teal">نتائج اختيارية</span><h2>الثقة والرضا والعلامة والأعمال</h2><p>مؤشرات سياقية اختيارية لا تدخل في التصنيف الأساسي.</p></div></div>${scoreProfile(outcomes,'لم تُجب هذه الحالة عن بنود النتائج الاختيارية، لذلك لم تُعرض درجة.','sand')}</article></section><section class="insights-grid"><article class="card"><div class="card-title"><div><span class="dashboard-kicker success">ما يعمل جيدًا</span><h2>نقاط القوة</h2></div></div><div class="insight-list">${insightCards(strengthItems,'strength','لا تتوفر نقاط قوة محسوبة.')}</div></article><article class="card"><div class="card-title"><div><span class="dashboard-kicker warning">بداية التحسين</span><h2>الفرص ذات الأولوية</h2></div></div><div class="insight-list">${insightCards(opportunityItems,'opportunity','لا تتوفر فرص محسوبة.')}</div></article></section><section class="dashboard-grid improvement-section"><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker">قرار تنفيذي</span><h2>مصفوفة الأثر والجهد</h2><p>الأرقام تربط النقاط بأولوية التحسين المقابلة.</p></div></div>${impactEffortMatrix(priorities.length ? priorities : opportunityItems)}</article><article class="card dashboard-panel priority-panel"><div class="card-title"><div><span class="dashboard-kicker teal">الترتيب المقترح</span><h2>أولويات العمل</h2><p>ابدأ بالأثر الأعلى والجهد الأقل، ثم راجع الملاءمة مع فريقك.</p></div></div><ol>${(priorities.length ? priorities : opportunityItems).slice(0,5).map((item,index)=>`<li><b>${number(item.rank || index+1)}</b><div><h3>${e(item.problem || item.title || dashboardName(item))}</h3>${item.action || item.description ? `<p>${e(item.action || item.description)}</p>` : ''}<span>${e(item.dimension_code || item.code || '')}${item.kpi ? ` · KPI: ${e(item.kpi)}` : ''}</span></div></li>`).join('') || '<li class="dashboard-empty">لا توجد أولويات مادية لهذه النتيجة.</li>'}</ol></article></section><section class="panel roadmap-dashboard"><div class="card-title"><div><span class="dashboard-kicker">من التشخيص إلى التنفيذ</span><h2>خارطة التحسين 30 / 90 / 180 يومًا</h2><p>خطوات مرحلية قابلة للمراجعة؛ حدّث المسؤول والمؤشر والتاريخ عند اعتماد الخطة داخليًا.</p></div></div><div class="roadmap-timeline">${timeline}</div></section><section class="card result-boundary"><div><h2>كيف تقرأ النتيجة؟</h2><p>${e(result.classification_notice || 'هذه نتيجة تشخيصية أولية، وليست إثباتًا سببيًا أو اعتمادًا علميًا نهائيًا.')}</p></div><div class="button-row public-result-actions"><button class="secondary-button" data-action="print-result">طباعة النتائج</button><a class="primary-button" href="#landing">العودة للرئيسية</a></div></section></main></div>`;
+  appView.innerHTML = `<div class="public-result-page dashboard-result">${publicNav()}<main><section class="result-hero dashboard-hero"><div><span>اكتمل مقياس النضج الاتصالي التسويقي</span><h1>تصنيف منشأتك: <i>${e(currentStage.label_ar || 'غير متاح')}</i></h1><p>${e(summary)}</p></div><div class="result-score-cards"><article><small>النضج MCM</small><strong>${number(mcmTotal,1)}</strong><span>/100</span></article><article><small>الكفاءة SMCE</small><strong>${number(smceTotal,1)}</strong><span>/100</span></article><article><small>الفارق بين الكفاءة والنضج</small><strong>${Number(efficiencyGap || 0) > 0 ? '+' : ''}${number(efficiencyGap,1)}</strong><span>نقطة</span></article></div></section><section class="panel maturity-dashboard"><div class="card-title"><div><h2>رحلة النضج والخطوة التالية</h2><p>المرحلة الحالية مميزة، والحدود تشخيصية أولية قيد التحقق.</p></div><div class="next-stage-callout"><small>الفجوة إلى ${e(nextLabel)}</small><strong>${nextGap > 0 ? `${number(nextGap,1)} نقطة` : 'أنت في المرحلة الأعلى'}</strong></div></div><div class="maturity-stages compact">${stages.map(stage=>`<div class="${Number(stage.level_order) === currentOrder ? 'active':''}"><b>${number(stage.level_order)}</b><span>${e(stage.label_ar)}</span></div>`).join('')}</div></section><section class="dashboard-grid"><article class="card dashboard-panel radar-panel"><div class="card-title"><div><span class="dashboard-kicker">بصمة القدرة المؤسسية</span><h2>أبعاد النضج السبعة MCM</h2><p>كل محور يمثل درجة بُعد مستقلة من 100.</p></div></div>${radarChart(mcmDimensions)}</article><article class="card dashboard-panel smce-panel"><div class="card-title"><div><span class="dashboard-kicker teal">النتيجة الاتصالية</span><h2>كفاءة التواصل SMCE</h2><p>قراءة مستقلة للأداء الاتصالي المرصود.</p></div></div>${scoreProfile(smceDimensions,'لا تتوفر درجات SMCE لهذه الحالة.','teal')}<div class="relationship-compact"><b>MCM</b><span>أثر إيجابي مقترح ←</span><b>SMCE</b><p>${e(relation.interpretation_ar || '')}</p></div></article></section><section class="dashboard-grid context-outcomes"><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker">جاهزية التنفيذ</span><h2>الممكنات التنظيمية</h2><p>تفسر قدرة المنشأة على التنفيذ ولا تدخل في مقام درجة MCM.</p></div></div>${scoreProfile(enablers,'تظهر الممكنات هنا عند احتساب بنود القيادة والكفاءات والتقنية والبيانات.','navy')}</article><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker teal">نتائج اختيارية</span><h2>الثقة والرضا والعلامة والأعمال</h2><p>مؤشرات سياقية اختيارية لا تدخل في التصنيف الأساسي.</p></div></div>${scoreProfile(outcomes,'لم تُجب هذه الحالة عن بنود النتائج الاختيارية، لذلك لم تُعرض درجة.','sand')}</article></section><section class="insights-grid"><article class="card"><div class="card-title"><div><span class="dashboard-kicker success">ما يعمل جيدًا</span><h2>نقاط القوة</h2></div></div><div class="insight-list">${insightCards(strengthItems,'strength','لا تتوفر نقاط قوة محسوبة.')}</div></article><article class="card"><div class="card-title"><div><span class="dashboard-kicker warning">بداية التحسين</span><h2>الفرص ذات الأولوية</h2></div></div><div class="insight-list">${insightCards(opportunityItems,'opportunity','لا تتوفر فرص محسوبة.')}</div></article></section><section class="dashboard-grid improvement-section"><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker">قرار تنفيذي</span><h2>مصفوفة الأثر والجهد</h2><p>الأرقام تربط النقاط بأولوية التحسين المقابلة.</p></div></div>${impactEffortMatrix(priorities.length ? priorities : opportunityItems)}</article><article class="card dashboard-panel priority-panel"><div class="card-title"><div><span class="dashboard-kicker teal">الترتيب المقترح</span><h2>أولويات العمل</h2><p>ابدأ بالأثر الأعلى والجهد الأقل، ثم راجع الملاءمة مع فريقك.</p></div></div><ol>${(priorities.length ? priorities : opportunityItems).slice(0,5).map((item,index)=>`<li><b>${number(item.rank || index+1)}</b><div><h3>${e(item.problem || item.title || dashboardName(item))}</h3>${item.action || item.description ? `<p>${e(item.action || item.description)}</p>` : ''}<span>${e(item.dimension_code || item.code || '')}${item.kpi ? ` · KPI: ${e(item.kpi)}` : ''}</span></div></li>`).join('') || '<li class="dashboard-empty">لا توجد أولويات مادية لهذه النتيجة.</li>'}</ol></article></section><section class="panel roadmap-dashboard"><div class="card-title"><div><span class="dashboard-kicker">من التشخيص إلى التنفيذ</span><h2>خارطة التحسين 30 / 90 / 180 يومًا</h2><p>خطوات مرحلية قابلة للمراجعة؛ حدّث المسؤول والمؤشر والتاريخ عند اعتماد الخطة داخليًا.</p></div></div><div class="roadmap-timeline">${timeline}</div></section>${consultationCta(result.assessment_id)}<section class="card result-boundary"><div><h2>كيف تقرأ النتيجة؟</h2><p>${e(result.classification_notice || 'هذه نتيجة تشخيصية أولية، وليست إثباتًا سببيًا أو اعتمادًا علميًا نهائيًا.')}</p></div><div class="button-row public-result-actions"><button class="secondary-button" data-action="print-result">طباعة النتائج</button><a class="primary-button" href="#landing">العودة للرئيسية</a></div></section></main></div>`;
 }
 
 function renderAuth() {
@@ -553,7 +643,7 @@ async function renderResults(route) {
   const actions = `<a class="secondary-button" href="#diagnosis/${id}">التشخيص</a><a class="secondary-button" href="#gaps/${id}">الفجوات</a><a class="secondary-button" href="#priorities/${id}">الأولويات</a><a class="primary-button" href="#roadmap/${id}">خارطة التحسين</a>`;
   const reportAction = canManageAssessments() ? `<button class="primary-button" data-action="generate-report" data-id="${id}" data-type="EXECUTIVE">5. إنشاء التقرير</button>` : '';
   const aiPlanAction = canManageAssessments() ? `<button class="secondary-button" data-action="generate-ai-plan" data-id="${id}">6. تحليل خطة التحسين</button>` : '';
-  appView.innerHTML = `<div class="page">${pageHeading(`نتائج التقييم #${id}`,`نتيجة ${e(data.organization_name)}`,`اكتمل القياس بتاريخ ${e(dateText(data.completed_at))}.`, actions)}${modelNotice()}<section class="panel maturity-panel"><div class="card-title"><div><h2>تصنيف المنشأة: ${e(mcm.maturity_level?.label_ar || 'غير مصنف')}</h2><p>مرحلة تشخيصية أولية ضمن مسار من خمس مراحل.</p></div><strong class="level-score">${number(mcm.total,1)} / 100</strong></div><div class="maturity-stages compact">${stages}</div></section><div class="card-grid"><article class="card span-6"><div class="card-title"><div><h2>النضج الاتصالي MCM</h2><p>متوسط موزون للأبعاد السبعة فقط.</p></div>${badge(mcm.maturity_level?.label_ar || 'غير مصنف')}</div><div class="score-layout"><div class="score-ring" style="--score:${Number(mcm.total || 0)}"><div><strong>${number(mcm.total,1)}</strong><small>/100</small></div></div><div class="dimension-list">${dimLines}</div></div></article><article class="card span-6"><div class="card-title"><div><h2>كفاءة التواصل SMCE</h2><p>نتيجة اتصالية لاحقة مقترحة، وتُحتسب بصورة مستقلة.</p></div></div><div class="score-layout"><div class="score-ring" style="--score:${Number(smce.total || 0)}"><div><strong>${number(smce.total,1)}</strong><small>/100</small></div></div><div class="dimension-list">${smceLines}</div></div></article><article class="card span-12 relationship-card"><div><small>النموذج المقترح</small><h2>MCM <span>←</span> SMCE</h2><p>${e(relation.interpretation_ar || '')}</p></div><div class="relationship-gap"><small>الكفاءة ناقص النضج</small><strong>${Number(relation.efficiency_minus_maturity || 0) > 0 ? '+' : ''}${number(relation.efficiency_minus_maturity,1)}</strong><span>${e(relation.narrative_ar || '')}</span></div></article></div>${context}<section class="panel"><div class="card-title"><div><h2>من النتيجة إلى التنفيذ</h2><p>انتقل بالتسلسل من الأدلة إلى الفجوة والأولوية ثم خارطة العمل.</p></div></div><div class="button-row"><a class="secondary-button" href="#diagnosis/${id}">1. التشخيص العميق</a><a class="secondary-button" href="#gaps/${id}">2. تحليل الفجوات</a><a class="secondary-button" href="#priorities/${id}">3. ترتيب الأولويات</a><a class="secondary-button" href="#benchmark/${id}">4. المقارنة المرجعية</a>${reportAction}${aiPlanAction}</div><p class="classification-boundary">${e(data.classification_notice)}</p></section></div>`;
+  appView.innerHTML = `<div class="page">${pageHeading(`نتائج التقييم #${id}`,`نتيجة ${e(data.organization_name)}`,`اكتمل القياس بتاريخ ${e(dateText(data.completed_at))}.`, actions)}${modelNotice()}<section class="panel maturity-panel"><div class="card-title"><div><h2>تصنيف المنشأة: ${e(mcm.maturity_level?.label_ar || 'غير مصنف')}</h2><p>مرحلة تشخيصية أولية ضمن مسار من خمس مراحل.</p></div><strong class="level-score">${number(mcm.total,1)} / 100</strong></div><div class="maturity-stages compact">${stages}</div></section><div class="card-grid"><article class="card span-6"><div class="card-title"><div><h2>النضج الاتصالي MCM</h2><p>متوسط موزون للأبعاد السبعة فقط.</p></div>${badge(mcm.maturity_level?.label_ar || 'غير مصنف')}</div><div class="score-layout"><div class="score-ring" style="--score:${Number(mcm.total || 0)}"><div><strong>${number(mcm.total,1)}</strong><small>/100</small></div></div><div class="dimension-list">${dimLines}</div></div></article><article class="card span-6"><div class="card-title"><div><h2>كفاءة التواصل SMCE</h2><p>نتيجة اتصالية لاحقة مقترحة، وتُحتسب بصورة مستقلة.</p></div></div><div class="score-layout"><div class="score-ring" style="--score:${Number(smce.total || 0)}"><div><strong>${number(smce.total,1)}</strong><small>/100</small></div></div><div class="dimension-list">${smceLines}</div></div></article><article class="card span-12 relationship-card"><div><small>النموذج المقترح</small><h2>MCM <span>←</span> SMCE</h2><p>${e(relation.interpretation_ar || '')}</p></div><div class="relationship-gap"><small>الكفاءة ناقص النضج</small><strong>${Number(relation.efficiency_minus_maturity || 0) > 0 ? '+' : ''}${number(relation.efficiency_minus_maturity,1)}</strong><span>${e(relation.narrative_ar || '')}</span></div></article></div>${context}<section class="panel"><div class="card-title"><div><h2>من النتيجة إلى التنفيذ</h2><p>انتقل بالتسلسل من الأدلة إلى الفجوة والأولوية ثم خارطة العمل.</p></div></div><div class="button-row"><a class="secondary-button" href="#diagnosis/${id}">1. التشخيص العميق</a><a class="secondary-button" href="#gaps/${id}">2. تحليل الفجوات</a><a class="secondary-button" href="#priorities/${id}">3. ترتيب الأولويات</a><a class="secondary-button" href="#benchmark/${id}">4. المقارنة المرجعية</a>${reportAction}${aiPlanAction}</div><p class="classification-boundary">${e(data.classification_notice)}</p></section>${consultationCta(id)}</div>`;
 }
 
 async function renderDimension(route) {
@@ -820,6 +910,18 @@ document.addEventListener('click', async event => {
     else if (action === 'scroll-model') scrollElementIntoView(document.querySelector('#methodology-public'));
     else if (action === 'scroll-maturity') scrollElementIntoView(document.querySelector('#maturity-public'));
     else if (action === 'stage-detail') stageDetailDialog(button.dataset.code);
+    else if (action === 'consultation-open') await consultationForm(button.dataset.assessment);
+    else if (action === 'consultation-withdraw') {
+      const participantToken = sessionStorage.getItem('mcm_participant_token') || '';
+      await api(`/api/consultations/${button.dataset.id}/consent`,{method:'POST',body:JSON.stringify({participant_token:participantToken || undefined})});
+      closeDialog(); showToast('سُحبت موافقة التواصل. نتيجتك لم تتأثر.');
+    }
+    else if (action === 'consultation-dismiss') {
+      // Declining is a UI-only choice. Nothing is sent, nothing is stored, and
+      // the result stays exactly as it was.
+      const section = document.querySelector('#consultation-cta');
+      if (section) section.innerHTML = '<p class="consultation-note">يمكنك طلب الاستشارة لاحقًا من هذه الصفحة.</p>';
+    }
     else if (action === 'scientific-status') {
       const options = ['EVIDENCE_INFORMED','EXPERT_REVIEWED','EMPIRICALLY_VALIDATED','ARCHIVED'];
       openDialog(`<h2 id="dialog-title">تغيير الحالة العلمية</h2><p class="classification-boundary">هذا ادعاء استدلالي عن الإصدار، ومستقل عن حالة المنتج. لا يُرفع تلقائيًا، ويُسجَّل كل تغيير في سجل التدقيق باسمك.</p><form id="scientific-status-form" class="form-grid"><input type="hidden" name="version_id" value="${e(button.dataset.id)}"><label class="field full"><span>الحالة العلمية</span><select name="scientific_status" required>${options.map(value=>`<option value="${value}" ${button.dataset.current === value ? 'selected':''}>${e(statusLabels[value] || value)}</option>`).join('')}</select></label><label class="field full"><span>المبرر (إلزامي)</span><textarea name="rationale" rows="3" required minlength="10" placeholder="ما الدليل الذي يسند هذه الحالة؟"></textarea></label><button class="primary-button full" type="submit">حفظ الحالة العلمية</button></form>`);
@@ -899,6 +1001,36 @@ document.addEventListener('submit', async event => {
       form.insertAdjacentHTML('afterend',`<p class="form-success">تم قبول الطلب. ${dev}</p>`);
     }
     else if (form.id === 'reset-form') { await api('/api/auth/reset-password',{method:'POST',body:JSON.stringify(data)});showToast('تم تحديث كلمة المرور.');navigate('login'); }
+    else if (form.id === 'consultation-form') {
+      const submit = form.querySelector('button[type="submit"]');
+      const errorBox = form.querySelector('.form-error');
+      const topics = [...form.querySelectorAll('input[name="consultation_topics"]:checked')].map(input=>input.value);
+      const participantToken = sessionStorage.getItem('mcm_participant_token') || '';
+      // One key per form instance, so a double click or a retried request
+      // cannot create a second lead for the same person.
+      form.dataset.idempotencyKey = form.dataset.idempotencyKey || `${data.assessment_id}-${Date.now()}-${Math.random().toString(36).slice(2,10)}`;
+      submit.disabled = true; errorBox.hidden = true;
+      try {
+        const response = await api('/api/consultations',{method:'POST',body:JSON.stringify({
+          assessment_id:Number(data.assessment_id),
+          participant_token:participantToken || undefined,
+          full_name:data.full_name, email:data.email, phone_number:data.phone_number,
+          organization_name:data.organization_name || undefined,
+          job_title:data.job_title || undefined,
+          preferred_contact_method:data.preferred_contact_method || undefined,
+          preferred_contact_time:data.preferred_contact_time || undefined,
+          consultation_topics:topics,
+          notes:data.notes || undefined,
+          consent_to_contact:Boolean(data.consent_to_contact),
+          marketing_consent:Boolean(data.marketing_consent),
+          idempotency_key:form.dataset.idempotencyKey,
+        })});
+        const lead = response.lead;
+        openDialog(`<div class="consultation-success"><span class="status-badge">تم الاستلام</span><h2 id="dialog-title">${response.duplicate ? 'طلبك مسجّل بالفعل' : 'تم استلام طلب الاستشارة'}</h2><p>${e(response.confirmation_ar || 'تم استلام طلب الاستشارة، وسيتواصل معك الفريق وفق وسيلة التواصل التي اخترتها.')}</p><div class="pill-list"><span>رقم الطلب: ${number(lead.id)}</span><span>الحالة: ${e(statusLabels[lead.status] || lead.status)}</span></div><p class="consultation-note">يمكنك سحب موافقة التواصل في أي وقت دون أن يؤثر ذلك على نتيجتك.</p><div class="button-row"><button class="secondary-button" data-action="consultation-withdraw" data-id="${lead.id}" type="button">سحب موافقة التواصل</button><button class="primary-button" data-action="close-dialog">إغلاق</button></div></div>`);
+      } catch (error) {
+        errorBox.textContent = apiMessage(error); errorBox.hidden = false; submit.disabled = false;
+      }
+    }
     else if (form.id === 'scientific-status-form') {
       await api(`/api/instrument-versions/${Number(data.version_id)}/scientific-status`,{method:'PATCH',body:JSON.stringify({scientific_status:data.scientific_status,rationale:data.rationale})});
       closeDialog(); showToast('سُجّلت الحالة العلمية في سجل التدقيق.'); router();

@@ -6,6 +6,30 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 
+def identity_tables_from_schema(schema: str) -> set[str]:
+    """Tables whose id is generated, so an INSERT must return it.
+
+    Derived from the schema rather than maintained by hand: a table added
+    without this would silently return lastrowid=None on PostgreSQL while
+    working on SQLite, which surfaces only as a foreign-key violation later.
+    """
+    return set(
+        re.findall(
+            r"CREATE TABLE IF NOT EXISTS\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*id\s+INTEGER PRIMARY KEY AUTOINCREMENT",
+            schema,
+            re.IGNORECASE,
+        )
+    )
+
+
+def register_identity_tables(names) -> None:
+    """Replace the identity-table set once the application schema is known."""
+    IDENTITY_TABLES.clear()
+    IDENTITY_TABLES.update(name.lower() for name in names)
+
+
+# Populated from the application schema at import time by `mcm.database`. The
+# literal seed below keeps this module usable on its own and documents intent.
 IDENTITY_TABLES = {
     "organizations",
     "users",
