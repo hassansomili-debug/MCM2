@@ -52,7 +52,7 @@ from .scoring import (
 )
 
 
-PUBLIC_FILES = {"index.html", "app.js", "i18n.js", "styles.css", "import.css", "platform.css", "og.png", "og-mcm-v2.png", "favicon.svg"}
+PUBLIC_FILES = {"index.html", "app.js", "styles.css", "import.css", "platform.css", "og.png", "og-mcm-v2.png", "favicon.svg"}
 ALLOWED_MISSING = {"NOT_APPLICABLE", "DONT_KNOW"}
 ROADMAP_STATUSES = {"NOT_STARTED", "IN_PROGRESS", "COMPLETED", "DEFERRED"}
 PRIVILEGED_ASSESSMENT_ROLES = {"COMPANY_ADMIN", "CONSULTANT", "SUPER_ADMIN"}
@@ -168,51 +168,6 @@ PRIVACY_NOTICE = {
 }
 
 
-# English counterparts for the server-side wording a participant sees. The
-# Arabic fields stay exactly as they are and these travel alongside them, so a
-# client that does not ask for English is unaffected and no payload loses a
-# field it had.
-PUBLIC_MODEL_EN = {
-    "label": "Evidence-Informed Applied Model",
-    "supporting": (
-        "The model draws on research in integrated marketing communication, information "
-        "governance, the customer journey, promise management, organizational learning and "
-        "communication efficiency."
-    ),
-    "result_disclaimer": (
-        "This result is diagnostic and developmental. It is not a certification, nor a final "
-        "judgement on the organization's performance."
-    ),
-    "methodology": [
-        (
-            "MCM Maturity is an applied model for measuring and developing marketing communication "
-            "maturity in organizations. It is built on the relevant scientific literature and on "
-            "current organizational practice, measures maturity across seven interrelated "
-            "dimensions, and measures SMCE communication efficiency as an outcome that stays "
-            "independent of the maturity score."
-        ),
-        (
-            "Results are used for diagnosis, gap identification, improvement planning and "
-            "benchmarking. Weights, level boundaries and the recommendation library remain under "
-            "review and refinement as data and applied evidence accumulate."
-        ),
-    ],
-}
-
-MATURITY_SECTION_EN = {
-    "title": "Marketing communication maturity stages",
-    "subtitle": (
-        "An organization's communication capability develops across five stages, from practices "
-        "driven by reaction to a sustainable, intelligent and scalable capability."
-    ),
-}
-
-CLASSIFICATION_NOTICE_EN = (
-    "This result is diagnostic and developmental. It is not a certification, nor a final "
-    "judgement on the organization's performance."
-)
-
-
 def public_model(scientific_status: str = "EVIDENCE_INFORMED") -> dict:
     """The public model description for a given scientific status.
 
@@ -223,10 +178,6 @@ def public_model(scientific_status: str = "EVIDENCE_INFORMED") -> dict:
     """
     model = dict(PUBLIC_MODEL)
     model["scientific_status"] = scientific_status
-    model["label_en_display"] = PUBLIC_MODEL_EN["label"]
-    model["supporting_en"] = PUBLIC_MODEL_EN["supporting"]
-    model["result_disclaimer_en"] = PUBLIC_MODEL_EN["result_disclaimer"]
-    model["methodology_en"] = PUBLIC_MODEL_EN["methodology"]
     if scientific_status == "EMPIRICALLY_VALIDATED":
         model["validation_claim_ar"] = "اكتمل التحقق الكمي التجريبي لهذا الإصدار."
     return model
@@ -1423,8 +1374,6 @@ class API(BaseHTTPRequestHandler):
             # when a dimension is renamed.
             "dimensions": dimensions,
             "title_ar": "مراحل النضج الاتصالي التسويقي",
-            "title_en": MATURITY_SECTION_EN["title"],
-            "subtitle_en": MATURITY_SECTION_EN["subtitle"],
             "subtitle_ar": (
                 "تتطور قدرة المنشأة الاتصالية عبر خمس مراحل، تبدأ من الممارسات التي تعتمد "
                 "على ردود الفعل وتنتهي بقدرة مستدامة وذكية وقابلة للتوسع."

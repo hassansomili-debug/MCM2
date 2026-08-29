@@ -739,8 +739,3 @@ dialog::backdrop { background: rgba(5,19,31,.58); backdrop-filter: blur(3px); }
 .knowledge-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .knowledge-head b { color: var(--teal-dark); font-family: "Space Grotesk", sans-serif; }
 .knowledge-head span { color: var(--navy); font-weight: 700; }
-
-/* The language toggle appears in the public navigation as well as the top bar,
-   because `.is-guest` hides the top bar on every public page. */
-.public-nav .lang-toggle { min-height: 38px; padding: 7px 14px; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: var(--navy); font: 700 12px/1 "Space Grotesk", sans-serif; cursor: pointer; }
-.public-nav .lang-toggle:hover { border-color: var(--teal); color: var(--teal-dark); }

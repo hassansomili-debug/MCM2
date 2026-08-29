@@ -226,34 +226,6 @@ class PlatformJourneyTests(unittest.TestCase):
         superseded = {"عشوائي", "ناشئ", "متكامل", "استباقي ومتكيف", "مؤسسي وذكي", "تفاعلي / عشوائي"}
         self.assertFalse(superseded.intersection({level["label_ar"] for level in levels}))
 
-    def test_server_payloads_carry_english_beside_arabic(self):
-        payload = self.request("GET", "/api/public/maturity-levels")
-        self.assertTrue(payload["title_en"])
-        self.assertTrue(payload["subtitle_en"])
-        model = payload["model"]
-        # Both languages travel together; the Arabic fields are unchanged.
-        self.assertEqual("نموذج تطبيقي قائم على الأدلة العلمية", model["label_ar"])
-        self.assertEqual("Evidence-Informed Applied Model", model["label_en_display"])
-        self.assertTrue(model["result_disclaimer_ar"])
-        self.assertTrue(model["result_disclaimer_en"])
-        self.assertEqual(len(model["methodology_ar"]), len(model["methodology_en"]))
-        # The scientific content was already bilingual and stays so.
-        for level in payload["levels"]:
-            self.assertTrue(level["label_ar"])
-            self.assertTrue(level["label_en"])
-        for construct in ("MCM", "SMCE"):
-            for dimension in payload["dimensions"][construct]:
-                self.assertTrue(dimension["name_ar"])
-                self.assertTrue(dimension["name_en"])
-
-        token, assessment_id = self._completed_direct_assessment("منشأة اللغتين")
-        result = self.request("GET", f"/api/participant/session/{token}")["result"]
-        self.assertTrue(result["classification_notice"])
-        self.assertTrue(result["classification_notice_en"])
-        # Assessment items were bilingual from the start.
-        items = self.request("GET", f"/api/participant/session/{token}")["items"]
-        self.assertTrue(all(item.get("prompt_en") for item in items))
-
     def test_dimension_names_follow_the_instrument_everywhere(self):
         """A dimension rename must reach the database and the client.
 
@@ -1503,57 +1475,6 @@ class PostgresAdapterTests(unittest.TestCase):
         breakpoints = css.count(".span-4 { grid-column: span 6; }") + css.count(
             ".span-3, .span-4, .span-5, .span-6, .span-7, .span-8, .span-12 { grid-column: 1; }")
         self.assertEqual(2, breakpoints, "a breakpoint remaps spans without remapping the default")
-
-    def test_english_locale_is_wired_and_its_coverage_is_measurable(self):
-        """The interface must switch language, and the gap must be countable.
-
-        A previous release refused a half-translated interface. English is
-        introduced with a catalogue and a coverage report, so whatever is not
-        yet translated stays visible as Arabic and is counted rather than
-        silently mixed or replaced by a placeholder.
-        """
-        root = Path(__file__).parents[1]
-        catalogue = (root / "i18n.js").read_text(encoding="utf-8")
-        client = (root / "app.js").read_text(encoding="utf-8")
-        shell = (root / "index.html").read_text(encoding="utf-8")
-
-        # The catalogue loads before the client that calls into it.
-        self.assertLess(shell.index("i18n.js"), shell.index("app.js"))
-        self.assertIn('data-action="toggle-language"', shell)
-        # Direction and language follow the choice, not a hardcoded value.
-        self.assertIn("document.documentElement.dir = locale() === 'en' ? 'ltr' : 'rtl';", client)
-        self.assertNotIn("document.documentElement.lang = 'ar';", client)
-        # A missing entry falls back to Arabic and is recorded, never blanked.
-        self.assertIn("MISSING.add(arabic); return arabic;", catalogue)
-        self.assertIn("function translationCoverage()", catalogue)
-        # The client actually calls the translator.
-        self.assertGreater(client.count("t('"), 150)
-
-    def test_the_language_toggle_is_reachable_and_direction_follows_it(self):
-        """The toggle must exist where a visitor actually is.
-
-        It lived only in the top bar, which `.is-guest` hides on every public
-        page, so no visitor could reach it. A leftover hardcoded direction also
-        overrode the locale-aware one, leaving English right-to-left.
-        """
-        root = Path(__file__).parents[1]
-        client = (root / "app.js").read_text(encoding="utf-8")
-        shell = (root / "index.html").read_text(encoding="utf-8")
-        css = (root / "platform.css").read_text(encoding="utf-8")
-
-        # Present in the top bar and in the public navigation.
-        self.assertIn('data-action="toggle-language"', shell)
-        self.assertIn("data-action=\"toggle-language\"", client)
-        # Delegated, so a copy rendered later still works.
-        self.assertIn("if (action === 'toggle-language')", client)
-        # The public navigation is hidden nowhere, unlike the top bar.
-        self.assertIn(".is-guest .topbar", css)
-        public_nav = client[client.index("function publicNav()"):]
-        public_nav = public_nav[:public_nav.index("\n}")]
-        self.assertIn("toggle-language", public_nav)
-        # Direction is set once, from the locale, and never overridden after.
-        self.assertNotIn("document.documentElement.dir = 'rtl';", client)
-        self.assertEqual(1, client.count("document.documentElement.dir ="))
 
     def test_client_script_is_syntactically_valid(self):
         """Parse app.js with a real JavaScript engine.

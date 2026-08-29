@@ -450,10 +450,6 @@ def score_payload(db, assessment_id: int) -> dict:
         "maturity_progression": progression,
         "dashboard": dashboard,
         "classification_notice": "النتيجة تشخيصية وتطويرية، ولا تمثل شهادة اعتماد أو حكمًا نهائيًا على أداء المنشأة.",
-        "classification_notice_en": (
-            "This result is diagnostic and developmental. It is not a certification, "
-            "nor a final judgement on the organization's performance."
-        ),
     }
 
 
