@@ -185,8 +185,9 @@ async function router() {
   if (researchRoutes.has(route.parts[0]) && !['RESEARCHER','SUPER_ADMIN'].includes(state.me?.user?.role)) return navigate('overview');
   if (route.parts[0] === 'admin' && state.me?.user?.role !== 'SUPER_ADMIN') return navigate('overview');
   if (route.parts[0] === 'participants' && !canManageAssessments()) return navigate('overview');
-  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون',participant:'دخول المشارك','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة'};
+  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون',participant:'دخول المشارك','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة'};
   document.querySelector('#page-label').textContent = labels[route.parts[0]] || 'مقياس النضج الاتصالي التسويقي';
+  if (route.parts[0] === 'dashboard') return navigate('results/latest');
   const handlers = {landing:renderLanding,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,participant:renderParticipant,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin};
   const handler = handlers[route.parts[0]];
   if (!handler) { appView.innerHTML = emptyState('الصفحة غير موجودة', 'تحقق من الرابط أو عد إلى مساحة العمل.', '<a class="primary-button" href="#overview">العودة للرئيسية</a>'); return; }
@@ -525,7 +526,23 @@ async function renderAssessment(route) {
 }
 
 async function renderResults(route) {
-  const id = Number(route.parts[1]); if (!id) return navigate('assessments');
+  // #results and #results/latest resolve to the newest completed assessment.
+  // With nothing completed the route explains the state instead of bouncing
+  // the user to another page with no explanation.
+  let id = Number(route.parts[1]);
+  if (!id) {
+    loading('جارٍ تحميل النتائج...');
+    id = await latestCompletedId();
+    if (!id) {
+      const pending = await firstIncompleteAssessment();
+      appView.innerHTML = `<div class="page">${pageHeading('مساحة العمل · النتائج','النتائج','تظهر النتائج بعد إرسال تقييم مكتمل.')}${
+        pending
+          ? emptyState('لديك تقييم غير مكتمل.', 'أكمل الإجابة على البنود المطلوبة ثم أرسل التقييم لعرض النتائج.', `<a class="primary-button" href="#assessment/${pending}">استكمال التقييم</a>`)
+          : emptyState('لم تكمل أي تقييم حتى الآن.', 'ابدأ التقييم لتحصل على تصنيف منشأتك وخارطة التحسين.', '<a class="primary-button" href="#assessments">ابدأ التقييم</a>')
+      }</div>`;
+      return;
+    }
+  }
   loading('جارٍ تحميل النتائج...'); const data = await api(`/api/results/${id}`);
   const mcm = data.scores.MCM; const smce = data.scores.SMCE;
   const dimLines = mcm.dimensions.map(item => `<div class="dimension-line"><a href="#dimension/${id}/${e(item.code)}">${e(item.code)} · ${e(item.name)}</a><div class="dimension-track"><i style="--score:${Number(item.score)}%"></i></div><b>${number(item.score,1)}</b></div>`).join('');
@@ -570,6 +587,11 @@ async function renderPriorities(route) {
 async function latestCompletedId() {
   const data = await api('/api/assessments');
   return data.assessments.find(item => item.status === 'COMPLETED')?.id || null;
+}
+
+async function firstIncompleteAssessment() {
+  const data = await api('/api/assessments');
+  return data.assessments.find(item => item.status !== 'COMPLETED')?.id || null;
 }
 
 async function renderRoadmap(route) {

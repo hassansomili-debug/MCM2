@@ -293,6 +293,23 @@ class PlatformJourneyTests(unittest.TestCase):
             self.assertEqual(current_label, metadata["new_label_ar"])
             self.assertFalse(metadata["scores_rewritten"])
 
+    def test_results_navigation_states_and_dashboard_alias(self):
+        client = (Path(__file__).parents[1] / "app.js").read_text(encoding="utf-8")
+        shell = (Path(__file__).parents[1] / "index.html").read_text(encoding="utf-8")
+        # The participant navigation item and the mobile bar both point at the
+        # results route, in both the sidebar and the compact navigation.
+        self.assertIn('href="#results" data-route="results"', shell)
+        self.assertIn('<a href="#results">النتائج</a>', shell)
+        # Anything still aiming at a dashboard route resolves to the results
+        # page rather than falling through to "page not found".
+        self.assertIn("if (route.parts[0] === 'dashboard') return navigate('results/latest');", client)
+        # Both empty states are explicit, each with its own call to action.
+        self.assertIn("لم تكمل أي تقييم حتى الآن.", client)
+        self.assertIn("ابدأ التقييم", client)
+        self.assertIn("لديك تقييم غير مكتمل.", client)
+        self.assertIn("استكمال التقييم", client)
+        self.assertNotIn("BETA", shell)
+
     def test_product_status_and_scientific_status_are_separate(self):
         admin = self.login()
         versions = self.request("GET", "/api/instruments", token=admin)["versions"]
