@@ -278,8 +278,9 @@ async function renderLanding() {
   const maturity = await loadMaturity();
   const model = modelInfo();
   const storageNotice = state.publicConfig.storage === 'ephemeral-demo' ? `<div class="landing-alert"><strong>نسخة عرض مؤقتة</strong><span>${e(state.publicConfig.notice || 'قد تُعاد تهيئة البيانات؛ لا تدخل بيانات حساسة.')}</span></div>` : '';
-  const mcmDimensions = ['الحوكمة والتوجيه','ذكاء أصحاب المصلحة','نزاهة المعلومات','تنسيق رحلة العميل','مواءمة الوعد والتجربة','الأدلة والتعلّم','الاستدامة والتوسع'];
-  const smceDimensions = ['الاستجابة والحل','المعنى والتفاعل','كفاءة الفعل','انخفاض الاحتكاك','كفاءة الموارد والأهداف'];
+  // Names come from the instrument, so a rename never has to be repeated here.
+  const mcmDimensions = (maturity.dimensions?.MCM || []).map(item => item.name_ar);
+  const smceDimensions = (maturity.dimensions?.SMCE || []).map(item => item.name_ar);
   const levels = maturity.levels || [];
   const maturityCards = stageCards(levels);
   appView.innerHTML = `<div class="landing-page">${publicNav()}${storageNotice}<main>
@@ -850,8 +851,9 @@ async function renderSettings() {
 async function renderMethodology() {
   const maturity = await loadMaturity();
   const model = modelInfo();
-  const mcm = ['MCM01 الحوكمة والتوجيه الاستراتيجي','MCM02 ذكاء أصحاب المصلحة والسياق','MCM03 حوكمة المعلومات والنزاهة','MCM04 التنسيق التنظيمي ورحلة العميل','MCM05 مواءمة الوعد والتجربة','MCM06 الأدلة والتعلم التكيفي','MCM07 الاستدامة وقابلية التوسع'];
-  const smce = ['SMCE01 كفاءة الاستجابة والحل','SMCE02 جودة المعنى والتفاعل','SMCE03 كفاءة الانتقال إلى الفعل','SMCE04 انخفاض الاحتكاك الاتصالي','SMCE05 كفاءة الموارد وتحقيق الأهداف'];
+  const label = item => `${item.code} ${item.name_ar}`;
+  const mcm = (maturity.dimensions?.MCM || []).map(label);
+  const smce = (maturity.dimensions?.SMCE || []).map(label);
   appView.innerHTML = `<div class="page">${pageHeading('المعرفة · المنهجية','كيف يعمل مقياس النضج الاتصالي التسويقي','فصل واضح بين السياق، القدرة المؤسسية، والكفاءة الاتصالية الناتجة.')}${modelNotice()}<div class="card-grid"><article class="card span-4"><span class="status-badge">1</span><h2>السياق والعوامل التمكينية</h2><p>دعم القيادة والكفاءات البشرية والبنية التقنية وجاهزية البيانات، إضافة إلى حجم المنشأة وعمرها وقطاعها وعدد المنصات. تفسر الظروف ولا تدخل في درجة MCM.</p></article><article class="card span-4"><span class="status-badge">2</span><h2>MCM · القدرة المؤسسية</h2><p>سبعة أبعاد تُطبّع بنودها إلى 0–100 ثم تجمع بأوزان إصدار الأداة.</p></article><article class="card span-4"><span class="status-badge">3</span><h2>SMCE · النتيجة الاتصالية</h2><p>خمسة أبعاد تُحتسب بصورة مستقلة لاختبار الأثر الإيجابي المقترح للنضج على الكفاءة.</p></article><article class="card span-6"><h2>أبعاد MCM</h2><div class="pill-list">${mcm.map(item => `<span>${e(item)}</span>`).join('')}</div></article><article class="card span-6"><h2>أبعاد SMCE</h2><div class="pill-list">${smce.map(item => `<span>${e(item)}</span>`).join('')}</div></article><article class="card span-12"><h2>${e(model.label_ar || '')}</h2>${(model.methodology_ar || []).map(paragraph=>`<p>${e(paragraph)}</p>`).join('')}<p class="classification-boundary">${e(model.result_disclaimer_ar || '')}</p></article><article class="card span-12"><h2>المراحل الخمس</h2><ol class="landing-maturity methodology-stages">${stageCards(maturity.levels || [])}</ol></article><article class="card span-12"><h2>عقد علمي واضح</h2><ul><li>الإجابة المفقودة لا تتحول إلى صفر.</li><li>الاحتساب والتصنيف والتشخيص تجري على الخادم.</li><li>كل نتيجة ترتبط بإصدار أداة وإصدار احتساب.</li><li>العلاقة MCM ← SMCE مقترحة وليست ادعاءً سببيًا مثبتًا.</li><li>تخضع الأوزان وحدود المستويات ومكتبة التوصيات للمراجعة والتحسين المستمر مع تراكم البيانات.</li></ul></article></div></div>`;
 }
 

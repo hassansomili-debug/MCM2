@@ -1199,6 +1199,32 @@ def _ensure_seed_data(db: sqlite3.Connection, *, reset_admin_password: bool = Fa
         (instrument_id,),
     ).fetchone()
     if current_version:
+        # Dimension display names follow the instrument. Without this a rename
+        # in the source leaves the database, and therefore the interface,
+        # showing the previous wording. The code, construct and weights are
+        # identifying data and are not touched, so no score moves.
+        for dimension in config.INSTRUMENT_DIMENSIONS:
+            previous = db.execute(
+                "SELECT name FROM dimensions WHERE version_id=? AND code=?",
+                (current_version["id"], dimension["code"]),
+            ).fetchone()
+            if not previous:
+                continue
+            if previous["name"] != dimension["name_ar"]:
+                db.execute(
+                    "UPDATE dimensions SET name=?,name_en=? WHERE version_id=? AND code=?",
+                    (dimension["name_ar"], dimension["name_en"], current_version["id"], dimension["code"]),
+                )
+                audit(
+                    db, None, "DIMENSION_LABEL_RENAMED", "dimensions", current_version["id"],
+                    {
+                        "code": dimension["code"],
+                        "previous_name_ar": previous["name"],
+                        "new_name_ar": dimension["name_ar"],
+                        "name_en": dimension["name_en"],
+                        "scores_rewritten": False,
+                    },
+                )
         for level in config.INSTRUMENT_MATURITY_LEVELS:
             # A stage rename updates the row in place so that every historical
             # assessment keeps its maturity_level_id and its classification.

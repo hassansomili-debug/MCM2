@@ -39,7 +39,10 @@ import urllib.request
 from collections.abc import Mapping
 from typing import Any
 
-from .instrument_v02 import MATURITY_LEVELS as INSTRUMENT_MATURITY_LEVELS
+from .instrument_v02 import (
+    DIMENSIONS as INSTRUMENT_DIMENSIONS,
+    MATURITY_LEVELS as INSTRUMENT_MATURITY_LEVELS,
+)
 
 
 SCHEMA_VERSION = "MCM_IMPROVEMENT_PLAN_1.0"
@@ -58,19 +61,19 @@ _MATURITY_LEVELS = {
     for level in INSTRUMENT_MATURITY_LEVELS
 }
 
-_SMCE_DIMENSIONS = {
-    "SMCE01": "كفاءة الاستجابة والحل",
-    "SMCE02": "جودة المعنى والتفاعل",
-    "SMCE03": "كفاءة الانتقال إلى الفعل",
-    "SMCE04": "انخفاض الاحتكاك الاتصالي",
-    "SMCE05": "كفاءة الموارد وتحقيق الأهداف",
-}
-_ENABLER_DIMENSIONS = {
-    "EN01": "دعم القيادة",
-    "EN02": "الكفاءات البشرية",
-    "EN03": "البنية التحتية التقنية",
-    "EN04": "جاهزية البيانات",
-}
+# Derived from the instrument so a dimension rename is never repeated here.
+def _dimension_names(construct: str) -> dict:
+    return {
+        row["code"]: row["name_ar"]
+        for row in INSTRUMENT_DIMENSIONS
+        if row["construct"] == construct
+    }
+
+
+_MCM_DIMENSIONS = _dimension_names("MCM")
+_SMCE_DIMENSIONS = _dimension_names("SMCE")
+_ENABLER_DIMENSIONS = _dimension_names("ENABLER")
+_OUTCOME_DIMENSIONS = _dimension_names("OUTCOME")
 
 _PLAYBOOK = {
     "MCM01": {
@@ -103,7 +106,7 @@ _PLAYBOOK = {
         "kpi_ar": "نسبة نقاط الرحلة الحرجة ذات مالك وتسليم موثق دون فقد السياق",
         "days_30": "رسم نقاط الرحلة الحرجة وتحديد مالك الاتصال وآلية التصعيد لكل نقطة.",
         "days_90": "تجربة آلية تسليم موحدة بين التسويق والمبيعات والخدمة على رحلة واحدة.",
-        "days_180": "تعميم معايير التنسيق وربطها بقياس الاحتكاك ورضا العميل.",
+        "days_180": "تعميم معايير التنسيق وربطها بقياس سلاسة التواصل ورضا العميل.",
     },
     "MCM05": {
         "name_ar": "مواءمة الوعد والتجربة والتوقعات",

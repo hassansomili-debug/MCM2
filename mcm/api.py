@@ -1331,6 +1331,16 @@ class API(BaseHTTPRequestHandler):
                    ORDER BY COALESCE(published_at,0) DESC, id DESC LIMIT 1"""
             ).fetchone()
             scientific_status = version["scientific_status"] if version else "EVIDENCE_INFORMED"
+            dimensions: dict[str, list] = {"MCM": [], "SMCE": [], "ENABLER": [], "OUTCOME": []}
+            if version:
+                for row in db.execute(
+                    """SELECT code,construct,name,name_en FROM dimensions
+                       WHERE version_id=? ORDER BY construct,sort_order,code""",
+                    (version["id"],),
+                ):
+                    dimensions.setdefault(row["construct"], []).append({
+                        "code": row["code"], "name_ar": row["name"], "name_en": row["name_en"],
+                    })
             levels = []
             if version:
                 for row in db.execute(
@@ -1359,6 +1369,10 @@ class API(BaseHTTPRequestHandler):
         finally:
             db.close()
         return {
+            # Dimension names travel with the stages so the landing page and
+            # the methodology page never hardcode a second copy that drifts
+            # when a dimension is renamed.
+            "dimensions": dimensions,
             "title_ar": "مراحل النضج الاتصالي التسويقي",
             "subtitle_ar": (
                 "تتطور قدرة المنشأة الاتصالية عبر خمس مراحل، تبدأ من الممارسات التي تعتمد "

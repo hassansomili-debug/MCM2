@@ -226,6 +226,41 @@ class PlatformJourneyTests(unittest.TestCase):
         superseded = {"عشوائي", "ناشئ", "متكامل", "استباقي ومتكيف", "مؤسسي وذكي", "تفاعلي / عشوائي"}
         self.assertFalse(superseded.intersection({level["label_ar"] for level in levels}))
 
+    def test_dimension_names_follow_the_instrument_everywhere(self):
+        """A dimension rename must reach the database and the client.
+
+        Seeding syncs maturity labels but did not sync dimension names, so a
+        rename in the instrument left the interface showing the old wording.
+        The client also held two hardcoded copies of the dimension lists.
+        """
+        payload = self.request("GET", "/api/public/maturity-levels")
+        smce = {item["code"]: item for item in payload["dimensions"]["SMCE"]}
+        self.assertEqual("وضوح وسلاسة التواصل", smce["SMCE04"]["name_ar"])
+        # The code and the English name are identifying data and are unchanged.
+        self.assertEqual("Low Communication Friction", smce["SMCE04"]["name_en"])
+        self.assertEqual(7, len(payload["dimensions"]["MCM"]))
+        self.assertEqual(5, len(payload["dimensions"]["SMCE"]))
+
+        client = (Path(__file__).parents[1] / "app.js").read_text(encoding="utf-8")
+        self.assertNotIn("انخفاض الاحتكاك", client)
+        # No dimension name may be hardcoded in the client any more.
+        for name in ("كفاءة الاستجابة والحل", "الحوكمة والتوجيه الاستراتيجي", "وضوح وسلاسة التواصل"):
+            self.assertNotIn(name, client, "dimension names must come from the API")
+
+        # The improvement-plan catalogue derives its labels from the instrument.
+        from mcm.ai_plans import _SMCE_DIMENSIONS
+        self.assertEqual("وضوح وسلاسة التواصل", _SMCE_DIMENSIONS["SMCE04"])
+
+        from mcm import database
+        with database.transaction() as db:
+            stored = db.execute(
+                """SELECT d.name,d.name_en FROM dimensions d
+                   JOIN instrument_versions v ON v.id=d.version_id
+                   WHERE d.code='SMCE04' AND v.version='0.4.0'"""
+            ).fetchone()
+        self.assertEqual("وضوح وسلاسة التواصل", stored["name"])
+        self.assertEqual("Low Communication Friction", stored["name_en"])
+
     def test_public_model_status_is_evidence_informed_not_pilot_or_validated(self):
         config_payload = self.request("GET", "/api/public-config")
         model = config_payload["model"]
