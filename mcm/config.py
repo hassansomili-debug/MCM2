@@ -166,7 +166,7 @@ DIAGNOSTIC_RULES = [
     ("DATA_WITHOUT_LEARNING", "بيانات دون تعلم", "MCM06", "lt", 50, "MEDIUM", 0.82),
     ("KEY_PERSON_DEPENDENCY", "الاعتماد على أفراد محوريين", "MCM07", "lt", 50, "HIGH", 0.88),
     ("JOURNEY_FRAGMENTATION", "تجزؤ رحلة العميل", "MCM04", "lt", 50, "HIGH", 0.88),
-    ("COMMUNICATION_FRICTION", "احتكاك في الاستجابة", "SMCE01:SMCE03", "average_lt", 55, "MEDIUM", 0.80),
+    ("COMMUNICATION_FRICTION", "خفض معوقات الاستجابة", "SMCE01:SMCE03", "average_lt", 55, "MEDIUM", 0.80),
     ("STAKEHOLDER_MISALIGNMENT", "عدم مواءمة أصحاب المصلحة", "MCM02", "lt", 50, "MEDIUM", 0.84),
     ("REACTIVE_COMMUNICATION", "اتصال تفاعلي قصير الأجل", "MCM01:MCM06", "average_lt", 45, "HIGH", 0.83),
     ("SCALABILITY_RISK", "مخاطر قابلية التوسع", "MCM07:SMCE04", "average_lt", 50, "HIGH", 0.87),

@@ -1225,6 +1225,30 @@ def _ensure_seed_data(db: sqlite3.Connection, *, reset_admin_password: bool = Fa
                         "scores_rewritten": False,
                     },
                 )
+        # Diagnostic rule names follow the configuration for the same reason
+        # dimension names do: the rules are inserted once at seed time and were
+        # never updated, so a rename in the source would not reach the database
+        # the interface reads. Thresholds, operators and dimensions are
+        # measurement data and are deliberately not synced here.
+        for code, name_ar, *_ in config.DIAGNOSTIC_RULES:
+            previous = db.execute(
+                "SELECT name_ar FROM diagnostic_rules WHERE version_id=? AND code=?",
+                (current_version["id"], code),
+            ).fetchone()
+            if previous and previous["name_ar"] != name_ar:
+                db.execute(
+                    "UPDATE diagnostic_rules SET name_ar=? WHERE version_id=? AND code=?",
+                    (name_ar, current_version["id"], code),
+                )
+                audit(
+                    db, None, "DIAGNOSTIC_RULE_RENAMED", "diagnostic_rules", current_version["id"],
+                    {
+                        "code": code,
+                        "previous_name_ar": previous["name_ar"],
+                        "new_name_ar": name_ar,
+                        "thresholds_changed": False,
+                    },
+                )
         for level in config.INSTRUMENT_MATURITY_LEVELS:
             # A stage rename updates the row in place so that every historical
             # assessment keeps its maturity_level_id and its classification.

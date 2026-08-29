@@ -261,6 +261,31 @@ class PlatformJourneyTests(unittest.TestCase):
         self.assertEqual("وضوح وسلاسة التواصل", stored["name"])
         self.assertEqual("Low Communication Friction", stored["name_en"])
 
+    def test_diagnostic_rule_names_follow_the_configuration(self):
+        """Rules are seeded once and were never updated afterwards.
+
+        Like dimension names, a rename in the source would otherwise never
+        reach the database the interface reads.
+        """
+        from mcm import database
+
+        with database.transaction() as db:
+            row = db.execute(
+                """SELECT r.name_ar,r.dimensions,r.operator,r.threshold,r.severity
+                   FROM diagnostic_rules r JOIN instrument_versions v ON v.id=r.version_id
+                   WHERE r.code='COMMUNICATION_FRICTION' AND v.version='0.4.0'"""
+            ).fetchone()
+        self.assertEqual("خفض معوقات الاستجابة", row["name_ar"])
+        # The measurement itself is untouched by a wording change.
+        self.assertEqual("SMCE01:SMCE03", row["dimensions"])
+        self.assertEqual("average_lt", row["operator"])
+        self.assertEqual(55, row["threshold"])
+        self.assertEqual("MEDIUM", row["severity"])
+
+        for source in ("mcm/config.py", "app.js"):
+            text = (Path(__file__).parents[1] / source).read_text(encoding="utf-8")
+            self.assertNotIn("احتكاك في الاستجابة", text)
+
     def test_public_model_status_is_evidence_informed_not_pilot_or_validated(self):
         config_payload = self.request("GET", "/api/public-config")
         model = config_payload["model"]
