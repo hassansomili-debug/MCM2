@@ -23,10 +23,13 @@ before implementation, otherwise they cannot be followed literally.
 
 Two further corrections of fact:
 
-- **The level 1 label to be replaced does not exist.** The request names
-  `تفاعلي / عشوائي` or `تفاعلي وعشوائي`. The actual stored and displayed label
-  is `عشوائي` (verified in source and in the live database). The change is
-  therefore `عشوائي` → `ردّة فعل / عشوائي`.
+- **The level 1 label to be replaced was `عشوائي`, not `تفاعلي / عشوائي`.**
+  Corrected during Phase 1: `تفاعلي / عشوائي` *does* exist, but only on
+  superseded instrument versions in a local development database. The published
+  `0.4.0` version — the only version in production — stored `عشوائي`. Both are
+  handled: the migration renames the current version's labels and leaves every
+  superseded version untouched, so historical assessments keep the wording they
+  were classified under.
 - **The stable code is not `LEVEL_1`.** It is `REACTIVE_AD_HOC`. The request
   says to keep the identifying code stable, so it must be left as is. Renaming
   it to `LEVEL_1` would break `mcm/ai_plans.py:54` and every historical

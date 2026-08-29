@@ -449,7 +449,7 @@ def score_payload(db, assessment_id: int) -> dict:
         "relationship": relationship,
         "maturity_progression": progression,
         "dashboard": dashboard,
-        "classification_notice": "تصنيف تشخيصي أولي ضمن نموذج بحثي قيد التحقق الكمي؛ لا يمثل إثباتًا سببيًا أو اعتمادًا علميًا نهائيًا.",
+        "classification_notice": "النتيجة تشخيصية وتطويرية، ولا تمثل شهادة اعتماد أو حكمًا نهائيًا على أداء المنشأة.",
     }
 
 

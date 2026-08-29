@@ -181,6 +181,7 @@ CREATE TABLE IF NOT EXISTS maturity_levels (
   threshold_status TEXT NOT NULL DEFAULT 'PROVISIONAL_LABEL_ONLY',
   source_reference TEXT,
   level_order BIGINT NOT NULL,
+  content_json TEXT,
   UNIQUE(version_id, code),
   FOREIGN KEY(version_id) REFERENCES instrument_versions(id)
 );
@@ -538,6 +539,9 @@ CREATE INDEX IF NOT EXISTS idx_score_runs_assessment ON score_runs(assessment_id
 CREATE INDEX IF NOT EXISTS idx_invitations_token_status ON invitations(token, status);
 CREATE INDEX IF NOT EXISTS idx_notifications_user_unread ON notifications(user_id, read_at);
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity, entity_id, created_at);
+
+-- Additive columns introduced after schema version 4.
+ALTER TABLE maturity_levels ADD COLUMN IF NOT EXISTS content_json TEXT;
 ALTER TABLE schema_migrations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;

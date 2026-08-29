@@ -35,6 +35,35 @@ PRIVILEGED_ASSESSMENT_ROLES = {"COMPANY_ADMIN", "CONSULTANT", "SUPER_ADMIN"}
 RESEARCH_ROLES = {"RESEARCHER", "SUPER_ADMIN"}
 _RATE_LIMITS: dict[str, deque] = defaultdict(deque)
 
+# The approved public description of the model. It states the evidentiary basis
+# without claiming completed empirical validation, and without the pilot wording
+# the participant-facing interface no longer uses. Internal lifecycle status
+# stays on instrument_versions and is not shown to participants.
+PUBLIC_MODEL = {
+    "label_ar": "نموذج تطبيقي قائم على الأدلة العلمية",
+    "label_en": "Evidence-Informed Applied Model",
+    "supporting_ar": (
+        "بُني النموذج بالاستناد إلى الدراسات العلمية في الاتصال التسويقي المتكامل، "
+        "وحوكمة المعلومات، ورحلة العميل، وإدارة الوعود، والتعلم التنظيمي، وكفاءة الاتصال."
+    ),
+    "result_disclaimer_ar": (
+        "النتيجة تشخيصية وتطويرية، ولا تمثل شهادة اعتماد أو حكمًا نهائيًا على أداء المنشأة."
+    ),
+    "methodology_ar": [
+        (
+            "نضج MCM نموذج تطبيقي لقياس وتطوير النضج الاتصالي التسويقي في المنشآت. "
+            "بُني النموذج بالاستناد إلى الأدبيات العلمية ذات الصلة والممارسات التنظيمية الحديثة، "
+            "ويقيس النضج عبر سبعة أبعاد مترابطة، مع قياس كفاءة الاتصال SMCE بوصفها نتيجة "
+            "مستقلة عن درجة النضج."
+        ),
+        (
+            "تستخدم نتائج النموذج لأغراض التشخيص، وتحديد الفجوات، وبناء خطط التحسين، "
+            "والمقارنة المعيارية. وتخضع الأوزان وحدود المستويات ومكتبة التوصيات للمراجعة "
+            "والتحسين المستمر مع تراكم البيانات والأدلة التطبيقية."
+        ),
+    ],
+}
+
 
 class APIError(Exception):
     def __init__(self, code: str, status: int = 400, details=None):
@@ -287,6 +316,7 @@ class API(BaseHTTPRequestHandler):
                 "platform_name": "مقياس النضج الاتصالي التسويقي",
                 "storage": config.STORAGE_MODE,
                 "notice": "بيئة عرض مؤقتة؛ لا تستخدم بيانات حقيقية." if config.EPHEMERAL_STORAGE else None,
+                "model": PUBLIC_MODEL,
                 "ai_improvement_plans": {
                     "available": config.AI_AVAILABLE,
                     "provider": config.AI_PROVIDER if config.AI_AVAILABLE else "off",
@@ -294,6 +324,8 @@ class API(BaseHTTPRequestHandler):
                     "notice": "التحسين الذكي اختياري ولا يغيّر الدرجة أو مرحلة النضج.",
                 },
             })
+        if method == "GET" and path == "/api/public/maturity-levels":
+            return self.send_json(self._public_maturity_levels())
         if method == "POST" and path == "/api/public/assessments":
             if config.EPHEMERAL_STORAGE:
                 raise APIError("durable_storage_required", 503)
@@ -330,6 +362,58 @@ class API(BaseHTTPRequestHandler):
         if path.startswith("/api/admin"):
             return self._admin(method, path, data, context)
         raise APIError("route_not_found", 404)
+
+    def _public_maturity_levels(self) -> dict:
+        """Serve the five stages for the public stage section and methodology page.
+
+        Both surfaces read this one payload so a stage rename is applied in the
+        instrument and the database only, never repeated in the client. Score
+        bands are configuration data and are returned so the client never
+        hardcodes a cutoff, but the public section does not display them.
+        """
+        db = connect()
+        try:
+            version = db.execute(
+                """SELECT id FROM instrument_versions
+                   WHERE archived_at IS NULL
+                   ORDER BY COALESCE(published_at,0) DESC, id DESC LIMIT 1"""
+            ).fetchone()
+            levels = []
+            if version:
+                for row in db.execute(
+                    """SELECT code,label_ar,label_en,level_order,min_score,max_score,content_json
+                       FROM maturity_levels WHERE version_id=? ORDER BY level_order""",
+                    (version["id"],),
+                ):
+                    try:
+                        content = json.loads(row["content_json"]) if row["content_json"] else {}
+                    except (TypeError, ValueError):
+                        content = {}
+                    levels.append({
+                        "code": row["code"],
+                        "label_ar": row["label_ar"],
+                        "label_en": row["label_en"],
+                        "level_order": row["level_order"],
+                        "min_score": row["min_score"],
+                        "max_score": row["max_score"],
+                        "summary_ar": content.get("summary"),
+                        "description_ar": content.get("description"),
+                        "characteristics_ar": content.get("characteristics") or [],
+                        "risks_ar": content.get("risks") or [],
+                        "focus_ar": content.get("focus") or [],
+                        "transition_ar": content.get("transition") or [],
+                    })
+        finally:
+            db.close()
+        return {
+            "title_ar": "مراحل النضج الاتصالي التسويقي",
+            "subtitle_ar": (
+                "تتطور قدرة المنشأة الاتصالية عبر خمس مراحل، تبدأ من الممارسات التي تعتمد "
+                "على ردود الفعل وتنتهي بقدرة مستدامة وذكية وقابلة للتوسع."
+            ),
+            "model": PUBLIC_MODEL,
+            "levels": levels,
+        }
 
     def _public_assessment(self, data: dict):
         """Create an anonymous SME assessment and a participant session in one step."""

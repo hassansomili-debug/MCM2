@@ -39,6 +39,8 @@ import urllib.request
 from collections.abc import Mapping
 from typing import Any
 
+from .instrument_v02 import MATURITY_LEVELS as INSTRUMENT_MATURITY_LEVELS
+
 
 SCHEMA_VERSION = "MCM_IMPROVEMENT_PLAN_1.0"
 SUPPORTED_PROVIDERS = frozenset({"off", "groq", "gemini", "ollama"})
@@ -50,12 +52,10 @@ _SAFETY_NOTICE = (
     "ولا تغير الدرجة العلمية أو مرحلة النضج، وتحتاج اعتمادًا بشريًا قبل التنفيذ."
 )
 
+# Derived from the instrument so a stage rename never has to be repeated here.
 _MATURITY_LEVELS = {
-    "REACTIVE_AD_HOC": (1, "عشوائي"),
-    "RESPONSIVE_EMERGING": (2, "ناشئ"),
-    "MANAGED_INTEGRATED": (3, "متكامل"),
-    "PROACTIVE_ADAPTIVE": (4, "استباقي ومتكيف"),
-    "INSTITUTIONALISED_INTELLIGENT": (5, "مؤسسي وذكي"),
+    level["code"]: (level["level_order"], level["label_ar"])
+    for level in INSTRUMENT_MATURITY_LEVELS
 }
 
 _SMCE_DIMENSIONS = {

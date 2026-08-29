@@ -301,6 +301,37 @@ dialog::backdrop { background: rgba(5,19,31,.58); backdrop-filter: blur(3px); }
 .landing-maturity li:nth-child(5) > span { color:#baf3e9; background:rgba(255,255,255,.1); }
 .landing-maturity li:nth-child(5) h3 { color:#fff; }
 .landing-maturity li:nth-child(5) p { color:#c7dce2; }
+
+/* Stage cards carry an English subtitle and an always-visible detail trigger.
+   Nothing is revealed on hover alone, so the section works on touch and for
+   keyboard users. */
+.landing-maturity li.stage-card { display:flex; flex-direction:column; min-height:300px; }
+.stage-card .stage-en { display:block; margin:0 0 12px; color:#8a99a5; font:600 11px/1.5 "Space Grotesk",sans-serif; letter-spacing:.03em; }
+.stage-card h3 { margin:22px 0 4px; }
+.stage-card p { flex:1; }
+.stage-more { margin-block-start:18px; padding:9px 14px; border:1px solid color-mix(in srgb,var(--stage-color) 40%,#fff); border-radius:999px; background:transparent; color:var(--stage-color); font:700 12px/1 inherit; font-family:inherit; cursor:pointer; text-align:center; }
+.stage-more:hover { background:color-mix(in srgb,var(--stage-color) 10%,#fff); }
+.stage-more:focus-visible { outline:3px solid var(--teal); outline-offset:2px; }
+.landing-maturity li:nth-child(5) .stage-en { color:#9fc4cd; }
+.landing-maturity li:nth-child(5) .stage-more { color:#baf3e9; border-color:rgba(255,255,255,.35); }
+.landing-maturity li:nth-child(5) .stage-more:hover { background:rgba(255,255,255,.12); }
+.stages-cta { display:flex; justify-content:center; margin-block-start:34px; }
+
+.stage-detail { max-width:640px; }
+.stage-detail h2 { margin:14px 0 2px; color:var(--navy); font-size:26px; }
+.stage-detail > p { margin:14px 0 6px; color:#4c5f6d; font-size:14px; line-height:1.95; }
+.stage-detail-block { margin-block-start:20px; }
+.stage-detail-block h3 { margin:0 0 8px; color:var(--teal-dark); font-size:14px; }
+.stage-detail-block ul { margin:0; padding-inline-start:20px; color:#5b6d7a; font-size:13px; line-height:1.9; }
+.methodology-stages { margin-block-start:8px; }
+
+@media (max-width:1100px) {
+  .landing-maturity { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .landing-maturity li.stage-card { min-height:0; }
+}
+@media (max-width:620px) {
+  .landing-maturity { grid-template-columns:1fr; }
+}
 .report-preview { display: grid; grid-template-columns: 1fr .8fr; gap: 70px; align-items: center; }
 .preview-card { padding: 27px; border-radius: 26px; background: #fff; box-shadow: 0 24px 70px rgba(11,39,79,.13); border: 1px solid #dce6eb; }
 .preview-card header { display: flex; justify-content: space-between; gap: 15px; color: #697b88; font-size: 12px; }

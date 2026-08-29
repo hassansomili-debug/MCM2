@@ -7,6 +7,7 @@ import zipfile
 from xml.etree import ElementTree as ET
 
 from .config import MAX_DOCX_BYTES
+from .instrument_v02 import MATURITY_LEVELS as INSTRUMENT_MATURITY_LEVELS
 
 
 SUPPORTED_TABLES = {
@@ -31,12 +32,8 @@ SCALE_RESPONSE_TYPES = {
     "RELATIVE_5_COMPETITOR": "LIKERT_RELATIVE",
 }
 NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
-CANONICAL_MATURITY_LABELS_AR = (
-    "عشوائي",
-    "ناشئ",
-    "متكامل",
-    "استباقي ومتكيف",
-    "مؤسسي وذكي",
+CANONICAL_MATURITY_LABELS_AR = tuple(
+    level["label_ar"] for level in INSTRUMENT_MATURITY_LEVELS
 )
 
 

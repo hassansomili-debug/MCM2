@@ -183,6 +183,116 @@ class PlatformJourneyTests(unittest.TestCase):
         self.request("POST", "/api/auth/logout", {}, token)
         self.request("GET", "/api/me", token=token, expected=401)
 
+    def test_maturity_stage_labels_and_public_stage_content(self):
+        payload = self.request("GET", "/api/public/maturity-levels")
+        levels = payload["levels"]
+        self.assertEqual(5, len(levels))
+        self.assertEqual([1, 2, 3, 4, 5], [level["level_order"] for level in levels])
+
+        expected = [
+            ("REACTIVE_AD_HOC", "ردّة فعل / عشوائي", "Reactive / Ad hoc"),
+            ("RESPONSIVE_EMERGING", "منظم أوليًا / مستجيب", "Responsive / Emerging"),
+            ("MANAGED_INTEGRATED", "مدار / متكامل", "Managed & Integrated"),
+            ("PROACTIVE_ADAPTIVE", "استباقي / متكيّف", "Proactive & Adaptive"),
+            ("مستدام", "مستدام / ذكي / قابل للتوسع", "Institutionalised & Intelligent"),
+        ]
+        for level, (_, label_ar, label_en) in zip(levels, expected):
+            self.assertEqual(label_ar, level["label_ar"])
+            # The English label is explicitly unchanged by this revision.
+            self.assertEqual(label_en, level["label_en"])
+            # Every stage carries the narrative the public section renders, so
+            # no component has to hardcode a second copy of the wording.
+            for field in ("summary_ar", "description_ar"):
+                self.assertTrue(level[field], f"{level['code']} is missing {field}")
+            for field in ("characteristics_ar", "risks_ar", "focus_ar", "transition_ar"):
+                self.assertTrue(level[field], f"{level['code']} is missing {field}")
+
+        # The identifying codes are stable data and must survive a rename.
+        self.assertEqual(
+            ["REACTIVE_AD_HOC", "RESPONSIVE_EMERGING", "MANAGED_INTEGRATED",
+             "PROACTIVE_ADAPTIVE", "INSTITUTIONALISED_INTELLIGENT"],
+            [level["code"] for level in levels],
+        )
+        # So must the score bands, so no historical classification moves.
+        self.assertEqual([0.0, 20.0, 40.0, 60.0, 80.0], [level["min_score"] for level in levels])
+
+        superseded = {"عشوائي", "ناشئ", "متكامل", "استباقي ومتكيف", "مؤسسي وذكي", "تفاعلي / عشوائي"}
+        self.assertFalse(superseded.intersection({level["label_ar"] for level in levels}))
+
+    def test_public_model_status_is_evidence_informed_not_pilot_or_validated(self):
+        config_payload = self.request("GET", "/api/public-config")
+        model = config_payload["model"]
+        self.assertEqual("نموذج تطبيقي قائم على الأدلة العلمية", model["label_ar"])
+        self.assertEqual("Evidence-Informed Applied Model", model["label_en"])
+        self.assertTrue(model["result_disclaimer_ar"])
+        self.assertEqual(2, len(model["methodology_ar"]))
+
+        serialized = json.dumps(config_payload, ensure_ascii=False)
+        for banned in ("Pilot", "PILOT", "Research Beta", "نموذج تجريبي", "نسخة تجريبية بحثية"):
+            self.assertNotIn(banned, serialized)
+        # An unearned validation claim is as wrong as the pilot wording.
+        for overclaim in ("Scientifically Validated", "معتمد علميًا", "مقياس محقق نهائيًا"):
+            self.assertNotIn(overclaim, serialized)
+
+    def test_participant_facing_client_uses_results_not_dashboard_wording(self):
+        client = (Path(__file__).parents[1] / "app.js").read_text(encoding="utf-8")
+        shell = (Path(__file__).parents[1] / "index.html").read_text(encoding="utf-8")
+        for banned in ("داشبورد", "لوحة التحكم", "Research Beta"):
+            self.assertNotIn(banned, client, f"{banned} still reaches the participant")
+            self.assertNotIn(banned, shell, f"{banned} still reaches the participant")
+        # The stage section and its drawer must be driven by the served data.
+        self.assertIn("/api/public/maturity-levels", client)
+        self.assertIn("data-action=\"stage-detail\"", client)
+        self.assertIn("اكتشف مستوى منشأتك", client)
+        self.assertIn("تعرف على هذه المرحلة", client)
+        # No stage label may be hardcoded in the client any more.
+        for label in ("ردّة فعل / عشوائي", "منظم أوليًا / مستجيب", "مستدام / ذكي / قابل للتوسع"):
+            self.assertNotIn(label, client, "stage labels must come from the API")
+
+    def test_stage_rename_preserves_scores_and_writes_an_audit_record(self):
+        from mcm import database
+
+        with database.transaction() as db:
+            version = db.execute(
+                "SELECT id FROM instrument_versions WHERE version='0.4.0' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            level = db.execute(
+                "SELECT id,label_ar FROM maturity_levels WHERE version_id=? AND code='REACTIVE_AD_HOC'",
+                (version["id"],),
+            ).fetchone()
+            level_id, current_label = level["id"], level["label_ar"]
+            classified = db.execute(
+                "SELECT COUNT(*) FROM assessment_scores WHERE maturity_level_id IS NOT NULL"
+            ).fetchone()[0]
+            db.execute(
+                "UPDATE maturity_levels SET label_ar='عشوائي' WHERE id=?", (level_id,)
+            )
+            db.execute("DELETE FROM audit_logs WHERE action='MATURITY_LABEL_RENAMED'")
+
+        database.init_db()
+
+        with database.transaction() as db:
+            renamed = db.execute(
+                "SELECT label_ar FROM maturity_levels WHERE id=?", (level_id,)
+            ).fetchone()["label_ar"]
+            self.assertEqual(current_label, renamed)
+            # The row is updated in place, so every score keeps its foreign key
+            # and no classification is recomputed.
+            self.assertEqual(
+                classified,
+                db.execute(
+                    "SELECT COUNT(*) FROM assessment_scores WHERE maturity_level_id IS NOT NULL"
+                ).fetchone()[0],
+            )
+            record = db.execute(
+                "SELECT metadata_json FROM audit_logs WHERE action='MATURITY_LABEL_RENAMED' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            self.assertIsNotNone(record, "a stage rename must be audited")
+            metadata = json.loads(record["metadata_json"])
+            self.assertEqual("عشوائي", metadata["previous_label_ar"])
+            self.assertEqual(current_label, metadata["new_label_ar"])
+            self.assertFalse(metadata["scores_rewritten"])
+
     def test_instrument_specification_is_not_misrepresented_as_item_bank(self):
         admin = self.login()
         document = (Path(__file__).parents[1] / "متطلبات_منصة_نضج_MCM.docx").read_bytes()
@@ -307,9 +417,10 @@ class PlatformJourneyTests(unittest.TestCase):
         result = self.request("POST", f"/api/participant/session/{created['token']}/submit", {})
         self.assertTrue(result["assessment_complete"])
         self.assertEqual("PROACTIVE_ADAPTIVE", result["scores"]["MCM"]["maturity_level"]["code"])
-        self.assertEqual("استباقي ومتكيف", result["scores"]["MCM"]["maturity_level"]["label_ar"])
+        self.assertEqual("استباقي / متكيّف", result["scores"]["MCM"]["maturity_level"]["label_ar"])
         self.assertEqual(
-            ["عشوائي", "ناشئ", "متكامل", "استباقي ومتكيف", "مؤسسي وذكي"],
+            ["ردّة فعل / عشوائي", "منظم أوليًا / مستجيب", "مدار / متكامل",
+             "استباقي / متكيّف", "مستدام / ذكي / قابل للتوسع"],
             [level["label_ar"] for level in result["maturity_progression"]],
         )
         self.assertEqual("MCM_TO_SMCE_PROPOSED_POSITIVE_EFFECT", result["relationship"]["model"])

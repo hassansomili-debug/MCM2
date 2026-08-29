@@ -21,7 +21,12 @@ except ImportError:  # SQLite-only local development does not need psycopg insta
 INTEGRITY_ERRORS = (sqlite3.IntegrityError,) + (
     (PostgresIntegrityError,) if PostgresIntegrityError is not None else ()
 )
-REQUIRED_SCHEMA_VERSION = 4
+REQUIRED_SCHEMA_VERSION = 5
+# Schema versions this release can upgrade in place. Version 4 differs from 5
+# only by additive columns and a stage-label revision, both of which are
+# applied and verified by migrate_postgres(). Any other older version is still
+# refused rather than silently marked complete.
+SUPPORTED_UPGRADE_VERSIONS = frozenset({4})
 
 
 def now() -> int:
@@ -279,6 +284,7 @@ CREATE TABLE IF NOT EXISTS maturity_levels (
   threshold_status TEXT NOT NULL DEFAULT 'PROVISIONAL_LABEL_ONLY',
   source_reference TEXT,
   level_order INTEGER NOT NULL,
+  content_json TEXT,
   UNIQUE(version_id, code),
   FOREIGN KEY(version_id) REFERENCES instrument_versions(id)
 );
@@ -641,6 +647,12 @@ CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity, entity_id, cre
 POSTGRES_SCHEMA = postgres_schema(SCHEMA)
 POSTGRES_TABLES = tuple(schema_table_names(POSTGRES_SCHEMA))
 
+# Columns added after schema version 4 shipped. `CREATE TABLE IF NOT EXISTS`
+# leaves an existing table untouched, so these run separately during migration.
+POSTGRES_ADDITIVE_COLUMNS = (
+    "ALTER TABLE maturity_levels ADD COLUMN IF NOT EXISTS content_json TEXT",
+)
+
 
 def _migrate_assessment_context(db: sqlite3.Connection) -> None:
     """Expand the context snapshot and make legacy aggregate enablers nullable.
@@ -786,6 +798,7 @@ def _migrate_legacy(db: sqlite3.Connection) -> None:
         },
         "maturity_levels": {
             "threshold_status": "TEXT NOT NULL DEFAULT 'PROVISIONAL_LABEL_ONLY'", "source_reference": "TEXT",
+            "content_json": "TEXT",
         },
         "assessments": {
             "assessment_type": "TEXT NOT NULL DEFAULT 'FULL'", "data_origin": "TEXT NOT NULL DEFAULT 'REAL'",
@@ -947,8 +960,8 @@ def _seed_version(db: sqlite3.Connection, instrument_id: int, version: str) -> i
         db.execute(
             """INSERT INTO maturity_levels(
                  version_id,code,label_ar,label_en,min_score,max_score,
-                 threshold_status,source_reference,level_order
-               ) VALUES (?,?,?,?,?,?,?,?,?)""",
+                 threshold_status,source_reference,level_order,content_json
+               ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
                 version_id,
                 level["code"],
@@ -959,6 +972,7 @@ def _seed_version(db: sqlite3.Connection, instrument_id: int, version: str) -> i
                 level.get("threshold_status", "PROVISIONAL_LABEL_ONLY"),
                 level.get("source_reference"),
                 int(level["level_order"]),
+                json.dumps(level.get("content_ar") or {}, ensure_ascii=False, sort_keys=True),
             ),
         )
     for code, name_ar, dimensions, operator, threshold, severity, confidence in config.DIAGNOSTIC_RULES:
@@ -1046,15 +1060,39 @@ def _ensure_seed_data(db: sqlite3.Connection, *, reset_admin_password: bool = Fa
     ).fetchone()
     if current_version:
         for level in config.INSTRUMENT_MATURITY_LEVELS:
+            # A stage rename updates the row in place so that every historical
+            # assessment keeps its maturity_level_id and its classification.
+            # Scores are never rewritten; only the display label moves. The
+            # previous wording is preserved in the audit trail.
+            previous = db.execute(
+                "SELECT label_ar,label_en FROM maturity_levels WHERE version_id=? AND code=?",
+                (current_version["id"], level["code"]),
+            ).fetchone()
             db.execute(
-                """UPDATE maturity_levels SET label_ar=?,label_en=?,min_score=?,max_score=?,threshold_status=?,source_reference=?,level_order=?
+                """UPDATE maturity_levels SET label_ar=?,label_en=?,min_score=?,max_score=?,threshold_status=?,source_reference=?,level_order=?,content_json=?
                    WHERE version_id=? AND code=?""",
                 (
                     level["label_ar"], level["label_en"], level["min_score"], level["max_score"],
                     level["threshold_status"], level["source_reference"], level["level_order"],
+                    json.dumps(level.get("content_ar") or {}, ensure_ascii=False, sort_keys=True),
                     current_version["id"], level["code"],
                 ),
             )
+            if previous and previous["label_ar"] != level["label_ar"]:
+                audit(
+                    db,
+                    None,
+                    "MATURITY_LABEL_RENAMED",
+                    "maturity_levels",
+                    current_version["id"],
+                    {
+                        "code": level["code"],
+                        "previous_label_ar": previous["label_ar"],
+                        "new_label_ar": level["label_ar"],
+                        "label_en": level["label_en"],
+                        "scores_rewritten": False,
+                    },
+                )
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('MIN_BENCHMARK_SAMPLE','10',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('GAP_THRESHOLD','15',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('PRIORITY_WEIGHTS',?,?)", (json.dumps({"gap": 0.45, "impact": 0.25, "dependency": 0.15, "effort": 0.10, "confidence": 0.05}), timestamp))
@@ -1122,6 +1160,7 @@ def init_db() -> None:
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (2,'direct_participant_context_and_revised_model',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (3,'scientific_instrument_v02_platform_v040',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (4,'supabase_postgresql_adapter_and_data_integrity',?)", (now(),))
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (5,'maturity_stage_labels_and_public_stage_content',?)", (now(),))
         db.execute("PRAGMA optimize")
         db.commit()
     finally:
@@ -1155,12 +1194,19 @@ def migrate_postgres() -> dict[str, int]:
         if (
             existing_application_tables
             and previous_version < REQUIRED_SCHEMA_VERSION
+            and previous_version not in SUPPORTED_UPGRADE_VERSIONS
         ):
             raise RuntimeError(
-                "A pre-v4 PostgreSQL application schema was detected; an explicit "
-                "upgrade migration is required before this release can be applied."
+                "An unsupported PostgreSQL application schema version "
+                f"({previous_version}) was detected; an explicit upgrade "
+                "migration is required before this release can be applied."
             )
         db.executescript(POSTGRES_SCHEMA)
+        # CREATE TABLE IF NOT EXISTS cannot widen a table that already exists,
+        # so additive columns introduced after a shipped schema version are
+        # applied explicitly here. Each statement must stay idempotent.
+        for statement in POSTGRES_ADDITIVE_COLUMNS:
+            db.execute(statement)
         created_tables = {
             row[0]
             for row in db.execute(
@@ -1191,6 +1237,7 @@ def migrate_postgres() -> dict[str, int]:
             (2, "direct_participant_context_and_revised_model"),
             (3, "scientific_instrument_v02_platform_v040"),
             (4, "supabase_postgresql_adapter_and_data_integrity"),
+            (5, "maturity_stage_labels_and_public_stage_content"),
         )
         for version, name in migration_rows:
             db.execute(
