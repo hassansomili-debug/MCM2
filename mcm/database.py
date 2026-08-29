@@ -28,12 +28,12 @@ except ImportError:  # SQLite-only local development does not need psycopg insta
 INTEGRITY_ERRORS = (sqlite3.IntegrityError,) + (
     (PostgresIntegrityError,) if PostgresIntegrityError is not None else ()
 )
-REQUIRED_SCHEMA_VERSION = 7
+REQUIRED_SCHEMA_VERSION = 8
 # Schema versions this release can upgrade in place. Version 4 differs from 5
 # only by additive columns and a stage-label revision, both of which are
 # applied and verified by migrate_postgres(). Any other older version is still
 # refused rather than silently marked complete.
-SUPPORTED_UPGRADE_VERSIONS = frozenset({4, 5, 6})
+SUPPORTED_UPGRADE_VERSIONS = frozenset({4, 5, 6, 7})
 
 CONSULTATION_STATUSES = (
     "NEW", "ASSIGNED", "CONTACTED", "QUALIFIED",
@@ -677,6 +677,24 @@ CREATE TABLE IF NOT EXISTS system_configuration (
   updated_by INTEGER,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS assessment_join_codes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL UNIQUE,
+  assessment_id INTEGER NOT NULL,
+  organization_id INTEGER NOT NULL,
+  created_by_user_id INTEGER,
+  created_by_participant_id INTEGER,
+  max_uses INTEGER NOT NULL DEFAULT 25,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY(assessment_id) REFERENCES assessments(id),
+  FOREIGN KEY(organization_id) REFERENCES organizations(id),
+  FOREIGN KEY(created_by_user_id) REFERENCES users(id),
+  FOREIGN KEY(created_by_participant_id) REFERENCES participants(id)
+);
+CREATE INDEX IF NOT EXISTS idx_join_codes_assessment ON assessment_join_codes(assessment_id, active);
 CREATE TABLE IF NOT EXISTS consultation_leads (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   assessment_id INTEGER NOT NULL,
@@ -1215,6 +1233,9 @@ def _ensure_seed_data(db: sqlite3.Connection, *, reset_admin_password: bool = Fa
     _backfill_version_statuses(db)
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('MIN_BENCHMARK_SAMPLE','10',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('GAP_THRESHOLD','15',?)", (timestamp,))
+    db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('ASSESSMENT_COOLDOWN_DAYS','90',?)", (timestamp,))
+    db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('MIN_ANALYTICS_COHORT_SIZE','10',?)", (timestamp,))
+    db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('MIN_RELATIONSHIP_SAMPLE','30',?)", (timestamp,))
     db.execute("INSERT OR IGNORE INTO system_configuration(key,value_json,updated_at) VALUES ('PRIORITY_WEIGHTS',?,?)", (json.dumps({"gap": 0.45, "impact": 0.25, "dependency": 0.15, "effort": 0.10, "confidence": 0.05}), timestamp))
     if not db.execute("SELECT 1 FROM notifications WHERE user_id=? LIMIT 1", (user_id,)).fetchone():
         db.execute(
@@ -1349,6 +1370,7 @@ def init_db() -> None:
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (5,'maturity_stage_labels_and_public_stage_content',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (6,'separate_product_and_scientific_status',?)", (now(),))
         db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (7,'consultation_leads_and_consent_versioning',?)", (now(),))
+        db.execute("INSERT OR IGNORE INTO schema_migrations(version,name,applied_at) VALUES (8,'participant_accounts_and_join_codes',?)", (now(),))
         db.execute("PRAGMA optimize")
         db.commit()
     finally:
@@ -1428,6 +1450,7 @@ def migrate_postgres() -> dict[str, int]:
             (5, "maturity_stage_labels_and_public_stage_content"),
             (6, "separate_product_and_scientific_status"),
             (7, "consultation_leads_and_consent_versioning"),
+            (8, "participant_accounts_and_join_codes"),
         )
         for version, name in migration_rows:
             db.execute(

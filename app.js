@@ -65,6 +65,12 @@ const errorLabels = {
   cannot_delete_own_account: 'لا يمكنك حذف حسابك أنت.',
   last_platform_administrator: 'لا يمكن حذف آخر مدير منصة نشط.',
   user_not_found: 'المستخدم غير موجود.',
+  join_code_required: 'أدخل كود المشاركة.',
+  join_code_invalid_or_expired: 'كود المشاركة غير صالح أو منتهي أو استُنفد.',
+  service_consent_required: 'يلزم إقرار موافقة الخدمة.',
+  organization_name_required: 'أدخل اسم المنشأة.',
+  assessment_cooldown_active: 'لا يمكن بدء تقييم جديد قبل انقضاء دورة القياس.',
+  join_code_unavailable: 'تعذر توليد كود؛ حاول مرة أخرى.',
 };
 
 function e(value) {
@@ -184,7 +190,7 @@ function applyShell() {
   count.textContent = state.me.unread_notifications || 0; count.hidden = !state.me.unread_notifications;
 }
 
-const publicRoutes = new Set(['landing', 'participant-start', 'login', 'participant-assessment', 'forgot', 'reset', 'privacy']);
+const publicRoutes = new Set(['landing', 'participant-start', 'login', 'participant-assessment', 'forgot', 'reset', 'privacy', 'join', 'signup']);
 const researchRoutes = new Set(['research', 'dataset', 'instruments', 'instrument', 'data-quality', 'statistics', 'exports']);
 async function router() {
   const request = ++state.routeRequest;
@@ -209,10 +215,10 @@ async function router() {
   if (route.parts[0] === 'consultations' && !['SUPER_ADMIN','CONSULTANT'].includes(state.me?.user?.role)) return navigate('overview');
   if (route.parts[0] === 'analytics' && !['SUPER_ADMIN','RESEARCHER'].includes(state.me?.user?.role)) return navigate('overview');
   if (route.parts[0] === 'participants' && !canManageAssessments()) return navigate('overview');
-  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',privacy:'سياسة الخصوصية',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة',consultations:'طلبات الاستشارة',analytics:'مركز تحليل البيانات'};
+  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',privacy:'سياسة الخصوصية',join:'الانضمام بكود',signup:'إنشاء حساب مشارك',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة',consultations:'طلبات الاستشارة',analytics:'مركز تحليل البيانات'};
   document.querySelector('#page-label').textContent = labels[route.parts[0]] || 'مقياس النضج الاتصالي التسويقي';
   if (route.parts[0] === 'dashboard') return navigate('results/latest');
-  const handlers = {landing:renderLanding,privacy:renderPrivacy,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin,consultations:renderConsultations,analytics:renderAnalytics};
+  const handlers = {landing:renderLanding,privacy:renderPrivacy,join:renderJoin,signup:renderSignup,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin,consultations:renderConsultations,analytics:renderAnalytics};
   const handler = handlers[route.parts[0]];
   if (!handler) { appView.innerHTML = emptyState('الصفحة غير موجودة', 'تحقق من الرابط أو عد إلى مساحة العمل.', '<a class="primary-button" href="#overview">العودة للرئيسية</a>'); return; }
   try { await handler(route); if (request === state.routeRequest) appView.focus({preventScroll:true}); }
@@ -220,7 +226,7 @@ async function router() {
 }
 
 function publicNav() {
-  return `<nav class="public-nav" aria-label="التنقل الرئيسي"><a class="public-brand" href="#landing"><span>ن</span><b>مقياس النضج الاتصالي التسويقي</b></a><div><a href="#landing">الرئيسية</a><button class="landing-nav-link" data-action="scroll-maturity" type="button">مراحل النضج</button><a href="#privacy">الخصوصية</a><a class="secondary-button" href="#login">تسجيل الدخول</a><a class="primary-button" href="#participant-start">ابدأ المقياس</a></div></nav>`;
+  return `<nav class="public-nav" aria-label="التنقل الرئيسي"><a class="public-brand" href="#landing"><span>ن</span><b>مقياس النضج الاتصالي التسويقي</b></a><div><a href="#landing">الرئيسية</a><button class="landing-nav-link" data-action="scroll-maturity" type="button">مراحل النضج</button><a href="#join">لدي كود مشاركة</a><a href="#privacy">الخصوصية</a><a class="secondary-button" href="#login">تسجيل الدخول</a><a class="primary-button" href="#participant-start">ابدأ المقياس</a></div></nav>`;
 }
 
 function scrollElementIntoView(element, block = 'start') {
@@ -478,6 +484,44 @@ async function loadPrivacyNotice() {
   return state.privacyNotice;
 }
 
+function renderJoin(route) {
+  state.publicPage = true; applyShell();
+  const prefilled = route?.query?.get('code') || '';
+  appView.innerHTML = `<div class="landing-page">${publicNav()}<main><div class="page narrow-page">
+    ${pageHeading('مشاركة زملاء العمل','الانضمام بكود مشاركة','زميلك في المنشأة أنشأ كود مشاركة ليجيب أكثر من موظف على نفس التقييم. الإجابات تُجمع في تقييم واحد، ولا يلزمك حساب.')}
+    <section class="panel"><form id="join-code-form" class="form-grid">
+      <label class="field full"><span>كود المشاركة</span><input name="code" dir="ltr" required autocomplete="off" placeholder="XXXX-XXXX" value="${e(prefilled)}"></label>
+      <label class="field"><span>الاسم الكامل</span><input name="full_name" required minlength="2" autocomplete="name"></label>
+      <label class="field"><span>المسمى الوظيفي</span><input name="job_title" maxlength="120"></label>
+      <label class="checkbox-field full"><input name="service_consent" type="checkbox" required><span>أوافق على معالجة إجاباتي لإصدار تشخيص المنشأة.</span></label>
+      <div class="form-error full" hidden></div>
+      <button class="primary-button full" type="submit">انضم إلى التقييم</button>
+    </form></section>
+    <section class="panel"><p>لا تملك كودًا؟ <a href="#participant-start">ابدأ تقييمًا جديدًا لمنشأتك</a>.</p></section>
+  </div></main></div>`;
+}
+
+function renderSignup(route) {
+  state.publicPage = true; applyShell();
+  // A token means the participant just finished anonymously and is claiming
+  // that result, so the organisation name is already known.
+  const claiming = Boolean(sessionStorage.getItem('mcm_participant_token'));
+  appView.innerHTML = `<div class="landing-page">${publicNav()}<main><div class="page narrow-page">
+    ${pageHeading('حساب اختياري','إنشاء حساب مشارك', claiming
+      ? 'احفظ نتيجتك بحساب لتعود إليها لاحقًا، وتتابع خارطة التحسين، وتدعو زملاءك، وتطلب استشارة. نتيجتك متاحة الآن سواء أنشأت حسابًا أو لم تفعل.'
+      : 'حساب المشارك اختياري. يتيح لك العودة إلى تقييماتك ونتائجك وخارطة التحسين، ودعوة زملائك بكود مشاركة، وطلب استشارة.')}
+    <section class="panel"><form id="participant-signup-form" class="form-grid">
+      <label class="field"><span>الاسم الكامل</span><input name="full_name" required minlength="2" autocomplete="name"></label>
+      <label class="field"><span>البريد الإلكتروني</span><input name="email" type="email" required autocomplete="email"></label>
+      ${claiming ? '' : '<label class="field full"><span>اسم المنشأة</span><input name="organization_name" required minlength="2"></label>'}
+      <label class="field full"><span>كلمة المرور</span><input name="password" type="password" minlength="10" required autocomplete="new-password"><small>عشرة محارف على الأقل، وتشمل حرفًا كبيرًا وصغيرًا ورقمًا.</small></label>
+      <div class="form-error full" hidden></div>
+      <button class="primary-button full" type="submit">إنشاء الحساب</button>
+    </form></section>
+    <section class="panel"><p>لديك حساب؟ <a href="#login">تسجيل الدخول</a> · <a href="#landing">العودة للرئيسية</a></p></section>
+  </div></main></div>`;
+}
+
 async function renderPrivacy() {
   state.publicPage = true; applyShell();
   const notice = await loadPrivacyNotice();
@@ -528,7 +572,7 @@ function renderPublicResult(result) {
   const timelineLabels = {'0-30':['الآن','أول 30 يومًا'],'31-90':['بعدها','من 31 إلى 90 يومًا'],'3-6':['ترسيخ','من 3 إلى 6 أشهر']};
   const timeline = Object.entries(timelineLabels).map(([key,[kicker,label]])=>`<section><header><small>${kicker}</small><h3>${label}</h3></header><div>${roadmap[key].slice(0,4).map(item=>`<article><b>${e(item.title || item.problem || dashboardName(item))}</b>${item.description || item.action ? `<p>${e(item.description || item.action)}</p>` : ''}${roadmapMeta(item) ? `<span>${e(roadmapMeta(item))}</span>` : ''}</article>`).join('') || '<p class="dashboard-empty">لا توجد إجراءات مقررة في هذا الأفق.</p>'}</div></section>`).join('');
   const insightCards = (items,tone,empty) => items.length ? items.map(item=>`<article class="insight-item ${tone}"><span>${e(item.code || item.dimension_code || '')}</span><h3>${e(dashboardName(item))}</h3><strong>${number(dashboardScore(item),1)}<small>/100</small></strong>${item.interpretation || item.reason ? `<p>${e(item.interpretation || item.reason)}</p>` : ''}</article>`).join('') : `<p class="dashboard-empty">${e(empty)}</p>`;
-  appView.innerHTML = `<div class="public-result-page dashboard-result">${publicNav()}<main><section class="result-hero dashboard-hero"><div><span>اكتمل مقياس النضج الاتصالي التسويقي</span><h1>تصنيف منشأتك: <i>${e(currentStage.label_ar || 'غير متاح')}</i></h1><p>${e(summary)}</p></div><div class="result-score-cards"><article><small>النضج MCM</small><strong>${number(mcmTotal,1)}</strong><span>/100</span></article><article><small>الكفاءة SMCE</small><strong>${number(smceTotal,1)}</strong><span>/100</span></article><article><small>الفارق بين الكفاءة والنضج</small><strong>${Number(efficiencyGap || 0) > 0 ? '+' : ''}${number(efficiencyGap,1)}</strong><span>نقطة</span></article></div></section><section class="panel maturity-dashboard"><div class="card-title"><div><h2>رحلة النضج والخطوة التالية</h2><p>المرحلة الحالية مميزة، والحدود تشخيصية أولية قيد التحقق.</p></div><div class="next-stage-callout"><small>الفجوة إلى ${e(nextLabel)}</small><strong>${nextGap > 0 ? `${number(nextGap,1)} نقطة` : 'أنت في المرحلة الأعلى'}</strong></div></div><div class="maturity-stages compact">${stages.map(stage=>`<div class="${Number(stage.level_order) === currentOrder ? 'active':''}"><b>${number(stage.level_order)}</b><span>${e(stage.label_ar)}</span></div>`).join('')}</div></section><section class="dashboard-grid"><article class="card dashboard-panel radar-panel"><div class="card-title"><div><span class="dashboard-kicker">بصمة القدرة المؤسسية</span><h2>أبعاد النضج السبعة MCM</h2><p>كل محور يمثل درجة بُعد مستقلة من 100.</p></div></div>${radarChart(mcmDimensions)}</article><article class="card dashboard-panel smce-panel"><div class="card-title"><div><span class="dashboard-kicker teal">النتيجة الاتصالية</span><h2>كفاءة التواصل SMCE</h2><p>قراءة مستقلة للأداء الاتصالي المرصود.</p></div></div>${scoreProfile(smceDimensions,'لا تتوفر درجات SMCE لهذه الحالة.','teal')}<div class="relationship-compact"><b>MCM</b><span>أثر إيجابي مقترح ←</span><b>SMCE</b><p>${e(relation.interpretation_ar || '')}</p></div></article></section><section class="dashboard-grid context-outcomes"><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker">جاهزية التنفيذ</span><h2>الممكنات التنظيمية</h2><p>تفسر قدرة المنشأة على التنفيذ ولا تدخل في مقام درجة MCM.</p></div></div>${scoreProfile(enablers,'تظهر الممكنات هنا عند احتساب بنود القيادة والكفاءات والتقنية والبيانات.','navy')}</article><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker teal">نتائج اختيارية</span><h2>الثقة والرضا والعلامة والأعمال</h2><p>مؤشرات سياقية اختيارية لا تدخل في التصنيف الأساسي.</p></div></div>${scoreProfile(outcomes,'لم تُجب هذه الحالة عن بنود النتائج الاختيارية، لذلك لم تُعرض درجة.','sand')}</article></section><section class="insights-grid"><article class="card"><div class="card-title"><div><span class="dashboard-kicker success">ما يعمل جيدًا</span><h2>نقاط القوة</h2></div></div><div class="insight-list">${insightCards(strengthItems,'strength','لا تتوفر نقاط قوة محسوبة.')}</div></article><article class="card"><div class="card-title"><div><span class="dashboard-kicker warning">بداية التحسين</span><h2>الفرص ذات الأولوية</h2></div></div><div class="insight-list">${insightCards(opportunityItems,'opportunity','لا تتوفر فرص محسوبة.')}</div></article></section><section class="dashboard-grid improvement-section"><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker">قرار تنفيذي</span><h2>مصفوفة الأثر والجهد</h2><p>الأرقام تربط النقاط بأولوية التحسين المقابلة.</p></div></div>${impactEffortMatrix(priorities.length ? priorities : opportunityItems)}</article><article class="card dashboard-panel priority-panel"><div class="card-title"><div><span class="dashboard-kicker teal">الترتيب المقترح</span><h2>أولويات العمل</h2><p>ابدأ بالأثر الأعلى والجهد الأقل، ثم راجع الملاءمة مع فريقك.</p></div></div><ol>${(priorities.length ? priorities : opportunityItems).slice(0,5).map((item,index)=>`<li><b>${number(item.rank || index+1)}</b><div><h3>${e(item.problem || item.title || dashboardName(item))}</h3>${item.action || item.description ? `<p>${e(item.action || item.description)}</p>` : ''}<span>${e(item.dimension_code || item.code || '')}${item.kpi ? ` · KPI: ${e(item.kpi)}` : ''}</span></div></li>`).join('') || '<li class="dashboard-empty">لا توجد أولويات مادية لهذه النتيجة.</li>'}</ol></article></section><section class="panel roadmap-dashboard"><div class="card-title"><div><span class="dashboard-kicker">من التشخيص إلى التنفيذ</span><h2>خارطة التحسين 30 / 90 / 180 يومًا</h2><p>خطوات مرحلية قابلة للمراجعة؛ حدّث المسؤول والمؤشر والتاريخ عند اعتماد الخطة داخليًا.</p></div></div><div class="roadmap-timeline">${timeline}</div></section>${consultationCta(result.assessment_id)}<section class="card result-boundary"><div><h2>كيف تقرأ النتيجة؟</h2><p>${e(result.classification_notice || 'هذه نتيجة تشخيصية أولية، وليست إثباتًا سببيًا أو اعتمادًا علميًا نهائيًا.')}</p></div><div class="button-row public-result-actions"><button class="secondary-button" data-action="print-result">طباعة النتائج</button><a class="primary-button" href="#landing">العودة للرئيسية</a></div></section></main></div>`;
+  appView.innerHTML = `<div class="public-result-page dashboard-result">${publicNav()}<main><section class="result-hero dashboard-hero"><div><span>اكتمل مقياس النضج الاتصالي التسويقي</span><h1>تصنيف منشأتك: <i>${e(currentStage.label_ar || 'غير متاح')}</i></h1><p>${e(summary)}</p></div><div class="result-score-cards"><article><small>النضج MCM</small><strong>${number(mcmTotal,1)}</strong><span>/100</span></article><article><small>الكفاءة SMCE</small><strong>${number(smceTotal,1)}</strong><span>/100</span></article><article><small>الفارق بين الكفاءة والنضج</small><strong>${Number(efficiencyGap || 0) > 0 ? '+' : ''}${number(efficiencyGap,1)}</strong><span>نقطة</span></article></div></section><section class="panel maturity-dashboard"><div class="card-title"><div><h2>رحلة النضج والخطوة التالية</h2><p>المرحلة الحالية مميزة، والحدود تشخيصية أولية قيد التحقق.</p></div><div class="next-stage-callout"><small>الفجوة إلى ${e(nextLabel)}</small><strong>${nextGap > 0 ? `${number(nextGap,1)} نقطة` : 'أنت في المرحلة الأعلى'}</strong></div></div><div class="maturity-stages compact">${stages.map(stage=>`<div class="${Number(stage.level_order) === currentOrder ? 'active':''}"><b>${number(stage.level_order)}</b><span>${e(stage.label_ar)}</span></div>`).join('')}</div></section><section class="dashboard-grid"><article class="card dashboard-panel radar-panel"><div class="card-title"><div><span class="dashboard-kicker">بصمة القدرة المؤسسية</span><h2>أبعاد النضج السبعة MCM</h2><p>كل محور يمثل درجة بُعد مستقلة من 100.</p></div></div>${radarChart(mcmDimensions)}</article><article class="card dashboard-panel smce-panel"><div class="card-title"><div><span class="dashboard-kicker teal">النتيجة الاتصالية</span><h2>كفاءة التواصل SMCE</h2><p>قراءة مستقلة للأداء الاتصالي المرصود.</p></div></div>${scoreProfile(smceDimensions,'لا تتوفر درجات SMCE لهذه الحالة.','teal')}<div class="relationship-compact"><b>MCM</b><span>أثر إيجابي مقترح ←</span><b>SMCE</b><p>${e(relation.interpretation_ar || '')}</p></div></article></section><section class="dashboard-grid context-outcomes"><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker">جاهزية التنفيذ</span><h2>الممكنات التنظيمية</h2><p>تفسر قدرة المنشأة على التنفيذ ولا تدخل في مقام درجة MCM.</p></div></div>${scoreProfile(enablers,'تظهر الممكنات هنا عند احتساب بنود القيادة والكفاءات والتقنية والبيانات.','navy')}</article><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker teal">نتائج اختيارية</span><h2>الثقة والرضا والعلامة والأعمال</h2><p>مؤشرات سياقية اختيارية لا تدخل في التصنيف الأساسي.</p></div></div>${scoreProfile(outcomes,'لم تُجب هذه الحالة عن بنود النتائج الاختيارية، لذلك لم تُعرض درجة.','sand')}</article></section><section class="insights-grid"><article class="card"><div class="card-title"><div><span class="dashboard-kicker success">ما يعمل جيدًا</span><h2>نقاط القوة</h2></div></div><div class="insight-list">${insightCards(strengthItems,'strength','لا تتوفر نقاط قوة محسوبة.')}</div></article><article class="card"><div class="card-title"><div><span class="dashboard-kicker warning">بداية التحسين</span><h2>الفرص ذات الأولوية</h2></div></div><div class="insight-list">${insightCards(opportunityItems,'opportunity','لا تتوفر فرص محسوبة.')}</div></article></section><section class="dashboard-grid improvement-section"><article class="card dashboard-panel"><div class="card-title"><div><span class="dashboard-kicker">قرار تنفيذي</span><h2>مصفوفة الأثر والجهد</h2><p>الأرقام تربط النقاط بأولوية التحسين المقابلة.</p></div></div>${impactEffortMatrix(priorities.length ? priorities : opportunityItems)}</article><article class="card dashboard-panel priority-panel"><div class="card-title"><div><span class="dashboard-kicker teal">الترتيب المقترح</span><h2>أولويات العمل</h2><p>ابدأ بالأثر الأعلى والجهد الأقل، ثم راجع الملاءمة مع فريقك.</p></div></div><ol>${(priorities.length ? priorities : opportunityItems).slice(0,5).map((item,index)=>`<li><b>${number(item.rank || index+1)}</b><div><h3>${e(item.problem || item.title || dashboardName(item))}</h3>${item.action || item.description ? `<p>${e(item.action || item.description)}</p>` : ''}<span>${e(item.dimension_code || item.code || '')}${item.kpi ? ` · KPI: ${e(item.kpi)}` : ''}</span></div></li>`).join('') || '<li class="dashboard-empty">لا توجد أولويات مادية لهذه النتيجة.</li>'}</ol></article></section><section class="panel roadmap-dashboard"><div class="card-title"><div><span class="dashboard-kicker">من التشخيص إلى التنفيذ</span><h2>خارطة التحسين 30 / 90 / 180 يومًا</h2><p>خطوات مرحلية قابلة للمراجعة؛ حدّث المسؤول والمؤشر والتاريخ عند اعتماد الخطة داخليًا.</p></div></div><div class="roadmap-timeline">${timeline}</div></section>${state.token ? '' : `<section class="card account-cta"><div><span class="dashboard-kicker">اختياري</span><h2>احفظ نتيجتك بحساب مشارك</h2><p>تعود إلى نتيجتك وخارطة تحسينك في أي وقت، وتدعو زملاءك في المنشأة للإجابة على نفس التقييم، وتطلب استشارة. نتيجتك ظاهرة الآن سواء أنشأت حسابًا أو لم تفعل.</p></div><div class="button-row"><a class="primary-button" href="#signup">إنشاء حساب</a><a class="secondary-button" href="#login">لدي حساب</a></div></section>`}${consultationCta(result.assessment_id)}<section class="card result-boundary"><div><h2>كيف تقرأ النتيجة؟</h2><p>${e(result.classification_notice || 'هذه نتيجة تشخيصية أولية، وليست إثباتًا سببيًا أو اعتمادًا علميًا نهائيًا.')}</p></div><div class="button-row public-result-actions"><button class="secondary-button" data-action="print-result">طباعة النتائج</button><a class="primary-button" href="#landing">العودة للرئيسية</a></div></section></main></div>`;
 }
 
 function renderAuth() {
@@ -570,7 +614,7 @@ async function renderOverview() {
 async function renderAssessments() {
   loading(); const data = await api('/api/assessments');
   const createAction = canManageAssessments() ? '<button class="primary-button" data-action="create-assessment" type="button">تقييم جديد</button>' : '';
-  const rows = data.assessments.map(item => `<div class="data-table__row"><strong>#${item.id}<small>${e(item.assessment_type)}</small></strong><span>${badge(item.status, item.status === 'COMPLETED' ? '' : 'warning')}</span><span>${e(item.instrument_version)} · ${e(item.instrument_status)}</span><span>${dateText(item.created_at)}</span><span>${number(item.mcm_total,1)}</span><span class="button-row">${item.status === 'COMPLETED' ? `<a class="secondary-button" href="#results/${item.id}">النتائج</a>${canManageAssessments() ? `<button class="secondary-button" data-action="repeat-assessment" data-id="${item.id}">إعادة</button>` : ''}` : `<a class="primary-button" href="#assessment/${item.id}">فتح</a>`}${hasRole('SUPER_ADMIN') ? `<button class="danger-button" data-action="delete-assessment" data-id="${item.id}">حذف</button>` : ''}</span></div>`);
+  const rows = data.assessments.map(item => `<div class="data-table__row"><strong>#${item.id}<small>${e(item.assessment_type)}</small></strong><span>${badge(item.status, item.status === 'COMPLETED' ? '' : 'warning')}</span><span>${e(item.instrument_version)} · ${e(item.instrument_status)}</span><span>${dateText(item.created_at)}</span><span>${number(item.mcm_total,1)}</span><span class="button-row">${item.status === 'COMPLETED' ? `<a class="secondary-button" href="#results/${item.id}">النتائج</a>${canManageAssessments() ? `<button class="secondary-button" data-action="repeat-assessment" data-id="${item.id}">إعادة</button>` : ''}` : `<a class="primary-button" href="#assessment/${item.id}">فتح</a>`}${item.status !== 'COMPLETED' ? `<button class="secondary-button" data-action="share-join-code" data-id="${item.id}">دعوة زميل</button>` : ''}${hasRole('SUPER_ADMIN') ? `<button class="danger-button" data-action="delete-assessment" data-id="${item.id}">حذف</button>` : ''}</span></div>`);
   appView.innerHTML = `<div class="page">${pageHeading('مساحة العمل · التقييمات','التقييمات المؤسسية','الحفظ والاستكمال مرتبطان بالمشارك وصلاحيته داخل المؤسسة.', createAction)}${modelNotice()}<section class="panel">${rows.length ? table(['التقييم','الحالة','إصدار الأداة','تاريخ البدء','MCM','الإجراء'], rows, 6, 850) : emptyState('لا توجد تقييمات', 'لا توجد تقييمات معيّنة لهذا الحساب.', createAction)}</section></div>`;
 }
 
@@ -1172,6 +1216,13 @@ document.addEventListener('click', async event => {
       const result = await api(`/api/assessments/${button.dataset.id}`,{method:'DELETE'});
       closeDialog(); showToast(`حُذف التقييم #${result.assessment_id} وسُجّل في التدقيق.`); router();
     }
+    else if (action === 'share-join-code') {
+      const result = await api(`/api/assessments/${button.dataset.id}/join-code`,{method:'POST',body:'{}'});
+      const code = result.join_code.code;
+      const url = new URL(`#join?code=${encodeURIComponent(code)}`, location.href).href;
+      openDialog(`<h2 id="dialog-title">كود مشاركة الزملاء</h2><p>شارك هذا الكود مع زملائك في المنشأة ليجيبوا على نفس التقييم. تُجمع إجاباتهم في تقييم واحد ولا يلزمهم حساب.</p><div class="join-code-display" dir="ltr">${e(code)}</div><label class="field full"><span>أو شارك الرابط</span><input id="join-url" dir="ltr" value="${e(url)}" readonly></label><p class="consultation-note">صالح حتى ${e(dateText(result.join_code.expires_at))} · حد الاستخدام ${number(result.join_code.max_uses)} · استُخدم ${number(result.join_code.use_count)}</p><div class="button-row"><button class="primary-button" type="button" data-action="copy-join-url">نسخ الرابط</button><button class="secondary-button" data-action="close-dialog">إغلاق</button></div>`);
+    }
+    else if (action === 'copy-join-url') { await navigator.clipboard.writeText(document.querySelector('#join-url').value); showToast('تم نسخ الرابط.'); }
     else if (action === 'consultation-status') {
       const statuses = ['NEW','ASSIGNED','CONTACTED','QUALIFIED','CONSULTATION_SCHEDULED','CONVERTED','CLOSED','DO_NOT_CONTACT'];
       openDialog(`<h2 id="dialog-title">تحديث حالة الطلب #${e(button.dataset.id)}</h2><form id="consultation-status-form" class="form-grid"><input type="hidden" name="lead_id" value="${e(button.dataset.id)}"><label class="field full"><span>الحالة</span><select name="status" required>${statuses.map(value=>`<option value="${value}" ${button.dataset.current === value ? 'selected':''}>${e(statusLabels[value] || value)}</option>`).join('')}</select></label><label class="field full"><span>ملاحظة داخلية</span><textarea name="note" rows="2" maxlength="2000"></textarea></label><label class="field full"><span>سبب الإغلاق (عند الإغلاق أو الإيقاف)</span><input name="closure_reason" maxlength="400"></label><div class="form-error full" hidden></div><button class="primary-button full" type="submit">حفظ الحالة</button></form>`);
@@ -1227,6 +1278,32 @@ document.addEventListener('submit', async event => {
       form.insertAdjacentHTML('afterend',`<p class="form-success">تم قبول الطلب. ${dev}</p>`);
     }
     else if (form.id === 'reset-form') { await api('/api/auth/reset-password',{method:'POST',body:JSON.stringify(data)});showToast('تم تحديث كلمة المرور.');navigate('login'); }
+    else if (form.id === 'join-code-form') {
+      const errorBox = form.querySelector('.form-error'); errorBox.hidden = true;
+      try {
+        const result = await api('/api/participant/join',{method:'POST',body:JSON.stringify({
+          code:data.code, full_name:data.full_name, job_title:data.job_title || undefined,
+          service_consent:Boolean(data.service_consent),
+        })});
+        sessionStorage.setItem('mcm_participant_token', result.token);
+        showToast('انضممت إلى التقييم. ابدأ الإجابة.');
+        navigate('participant-assessment');
+      } catch (error) { errorBox.textContent = apiMessage(error); errorBox.hidden = false; }
+    }
+    else if (form.id === 'participant-signup-form') {
+      const errorBox = form.querySelector('.form-error'); errorBox.hidden = true;
+      try {
+        const result = await api('/api/participant/account',{method:'POST',body:JSON.stringify({
+          full_name:data.full_name, email:data.email, password:data.password,
+          organization_name:data.organization_name || undefined,
+          participant_token:sessionStorage.getItem('mcm_participant_token') || undefined,
+        })});
+        state.token = result.token; localStorage.setItem('mcm_token', result.token);
+        state.me = null; state.publicPage = false;
+        showToast('أُنشئ حسابك. نتيجتك محفوظة الآن.');
+        navigate(result.claimed_assessment_id ? `results/${result.claimed_assessment_id}` : 'overview');
+      } catch (error) { errorBox.textContent = apiMessage(error); errorBox.hidden = false; }
+    }
     else if (form.id === 'withdraw-consent-form') {
       const errorBox = form.querySelector('.form-error');
       const participantToken = sessionStorage.getItem('mcm_participant_token') || '';

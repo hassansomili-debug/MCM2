@@ -25,7 +25,7 @@ Roles are `COMPANY_RESPONDENT`, `COMPANY_ADMIN`, `CONSULTANT`, `RESEARCHER`, and
 | `maturity_levels` | Server-side MCM maturity intervals. |
 | `diagnostic_rules`, `recommendations` | Versioned deterministic evidence library. |
 
-SQLite and PostgreSQL preserve the same 46-table application surface. The Supabase SQL snapshot is `supabase/migrations/202608280001_mcm_platform.sql`; it retains epoch timestamps, numeric flags and text JSON so API and export semantics remain identical across backends.
+SQLite and PostgreSQL preserve the same 47-table application surface. The Supabase SQL snapshot is `supabase/migrations/202608280001_mcm_platform.sql`; it retains epoch timestamps, numeric flags and text JSON so API and export semantics remain identical across backends.
 
 ## Assessment and scoring
 

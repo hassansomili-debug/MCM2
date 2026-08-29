@@ -60,7 +60,7 @@ python3 -m unittest discover -s tests -v
 
 ## التخزين والنشر
 
-يستخدم التطوير المحلي SQLite عبر `MCM_DB_PATH`. أما الإنتاج على Vercel فيدعم Supabase/PostgreSQL عبر طبقة Psycopg متوافقة مع SQL الحالي، ومخطط كامل من 46 جدولًا، وRLS يمنع أدوار Data API العامة من الوصول إلى جداول المنصة.
+يستخدم التطوير المحلي SQLite عبر `MCM_DB_PATH`. أما الإنتاج على Vercel فيدعم Supabase/PostgreSQL عبر طبقة Psycopg متوافقة مع SQL الحالي، ومخطط كامل من 47 جدولًا، وRLS يمنع أدوار Data API العامة من الوصول إلى جداول المنصة.
 
 اضبط رابط Supavisor Transaction pooler في `MCM_DATABASE_URL`، ورابط direct أو Session pooler في `MCM_DATABASE_MIGRATION_URL`، ثم نفّذ مرة واحدة:
 

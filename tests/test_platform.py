@@ -1046,6 +1046,93 @@ class PlatformJourneyTests(unittest.TestCase):
         self.assertEqual("participant_session_invalid", self.request(
             "GET", "/api/participant/session/not-a-real-token", expected=401)["error"])
 
+    def test_participant_account_is_optional_and_claims_the_anonymous_result(self):
+        token, assessment_id = self._completed_direct_assessment("منشأة الحساب الاختياري")
+        # The result is reachable before any account exists.
+        self.assertTrue(self.request("GET", f"/api/participant/session/{token}")["result"])
+
+        created = self.request("POST", "/api/participant/account", {
+            "full_name": "مشارك بحساب", "email": "participant-account@example.test",
+            "password": "ParticipantPass2026", "participant_token": token,
+        }, expected=201)
+        self.assertEqual("COMPANY_RESPONDENT", created["user"]["role"])
+        self.assertEqual(assessment_id, created["claimed_assessment_id"])
+
+        # Signed in, the participant reaches their own result and roadmap.
+        account = created["token"]
+        self.assertEqual("COMPANY_RESPONDENT", self.request("GET", "/api/me", token=account)["user"]["role"])
+        self.assertEqual(assessment_id, self.request("GET", f"/api/results/{assessment_id}", token=account)["assessment_id"])
+        self.request("GET", f"/api/roadmap/{assessment_id}", token=account)
+
+        # A participant account is a company account and can never be more.
+        self.assertEqual("permission_denied", self.request(
+            "GET", "/api/admin/users", token=account, expected=403)["error"])
+        self.assertEqual("permission_denied", self.request(
+            "GET", "/api/analytics", token=account, expected=403)["error"])
+        self.assertEqual("permission_denied", self.request(
+            "POST", "/api/admin/users", {"name": "x", "email": "x@example.test",
+                                         "password": "XxPassword2026", "role": "SUPER_ADMIN"},
+            token=account, expected=403)["error"])
+
+    def test_colleagues_join_one_assessment_through_a_shared_code(self):
+        owner = self.login()
+        created = self.request("POST", "/api/assessments", {"assessment_type": "FULL"}, owner, 201)
+        assessment_id = created["id"]
+
+        issued = self.request("POST", f"/api/assessments/{assessment_id}/join-code", {}, owner, 201)["join_code"]
+        code = issued["code"]
+        # Read aloud and retyped, so the alphabet excludes look-alike glyphs.
+        self.assertNotRegex(code, r"[OI01]")
+        # Re-issuing returns the live code rather than piling up new ones.
+        self.assertEqual(code, self.request(
+            "POST", f"/api/assessments/{assessment_id}/join-code", {}, owner, 201)["join_code"]["code"])
+
+        joined = self.request("POST", "/api/participant/join", {
+            "code": code.lower(), "full_name": "زميل في المنشأة",
+            "job_title": "أخصائي تسويق", "service_consent": True,
+        }, expected=201)
+        # The colleague answers the same assessment, not a new one.
+        self.assertEqual(assessment_id, joined["assessment_id"])
+        session = self.request("GET", f"/api/participant/session/{joined['token']}")
+        self.assertEqual(assessment_id, session["assessment"]["id"])
+
+        self.assertEqual("service_consent_required", self.request(
+            "POST", "/api/participant/join",
+            {"code": code, "full_name": "بلا موافقة"}, expected=422)["error"])
+        self.assertEqual("join_code_invalid_or_expired", self.request(
+            "POST", "/api/participant/join",
+            {"code": "ZZZZ-ZZZZ", "full_name": "كود خاطئ", "service_consent": True},
+            expected=404)["error"])
+
+    def test_one_assessment_per_organisation_each_cycle(self):
+        from mcm import database
+
+        self.request("POST", "/api/auth/register", {
+            "name": "صاحب الدورة", "email": "cycle@example.test", "password": "CycleOwner2026",
+            "organization_name": "منشأة دورة القياس", "service_consent": True,
+        }, expected=201)
+        owner = self.login("cycle@example.test", "CycleOwner2026")
+        first = self.request("POST", "/api/assessments", {"assessment_type": "FULL"}, owner, 201)
+
+        blocked = self.request("POST", "/api/assessments", {"assessment_type": "FULL"}, owner, expected=409)
+        self.assertEqual("assessment_cooldown_active", blocked["error"])
+        self.assertEqual(90, blocked["details"]["days"])
+        self.assertEqual(first["id"], blocked["details"]["previous_assessment_id"])
+        self.assertGreater(blocked["details"]["days_remaining"], 0)
+
+        # A colleague joining the existing assessment adds a respondent and is
+        # never treated as starting a new cycle.
+        code = self.request("POST", f"/api/assessments/{first['id']}/join-code", {}, owner, 201)["join_code"]["code"]
+        self.request("POST", "/api/participant/join", {
+            "code": code, "full_name": "زميل داخل الدورة", "service_consent": True,
+        }, expected=201)
+
+        # Once the window has passed the next cycle opens.
+        with database.transaction() as db:
+            db.execute("UPDATE assessments SET created_at=? WHERE id=?",
+                       (int(__import__("time").time()) - 91 * 86_400, first["id"]))
+        self.request("POST", "/api/assessments", {"assessment_type": "FULL"}, owner, 201)
+
     def test_the_invitation_system_is_gone(self):
         owner = self.login()
         # Every invitation endpoint is removed, not merely hidden in the client.
@@ -1268,7 +1355,7 @@ class PostgresAdapterTests(unittest.TestCase):
         self.assertEqual("OK", completed.stdout.strip(), completed.stdout)
 
     def test_postgres_schema_matches_sqlite_surface(self):
-        self.assertEqual(46, len(POSTGRES_TABLES))
+        self.assertEqual(47, len(POSTGRES_TABLES))
         self.assertEqual(len(POSTGRES_TABLES), len(set(POSTGRES_TABLES)))
         self.assertNotIn("AUTOINCREMENT", POSTGRES_SCHEMA)
         self.assertNotIn(" BLOB", POSTGRES_SCHEMA)

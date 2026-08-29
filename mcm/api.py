@@ -446,6 +446,10 @@ class API(BaseHTTPRequestHandler):
             return self.send_json(self._public_maturity_levels())
         if method == "GET" and path == "/api/public/privacy":
             return self.send_json(PRIVACY_NOTICE)
+        if method == "POST" and path == "/api/participant/account":
+            return self._participant_account(data)
+        if method == "POST" and path == "/api/participant/join":
+            return self._redeem_join_code(data)
         if method == "POST" and path == "/api/consultations":
             # Reachable with a participant session token or an authenticated
             # user; authorisation is resolved against the assessment itself.
@@ -1047,6 +1051,210 @@ class API(BaseHTTPRequestHandler):
         elif include_contact:
             payload["contact_withheld_reason"] = "CONTACT_CONSENT_WITHDRAWN"
         return payload
+
+    def _assessment_cooldown(self, db, organization_id: int, *, exclude_id: int | None = None):
+        """Refuse a new assessment while the organisation is inside its cycle.
+
+        The instrument measures a capability that moves slowly; repeating it
+        weekly produces noise, not a trend. The window is configuration, and a
+        colleague joining an existing assessment through a code is unaffected —
+        that adds a respondent, it does not start a new cycle.
+        """
+        days = int(get_config(db, "ASSESSMENT_COOLDOWN_DAYS", 90) or 90)
+        if days <= 0:
+            return
+        clause = "AND id!=?" if exclude_id else ""
+        params = [organization_id] + ([exclude_id] if exclude_id else [])
+        latest = db.execute(
+            f"SELECT id,created_at FROM assessments WHERE organization_id=? {clause} ORDER BY created_at DESC LIMIT 1",
+            tuple(params),
+        ).fetchone()
+        if not latest:
+            return
+        window = days * 86_400
+        elapsed = now() - int(latest["created_at"])
+        if elapsed < window:
+            available_at = int(latest["created_at"]) + window
+            raise APIError("assessment_cooldown_active", 409, {
+                "days": days,
+                "available_at": available_at,
+                "days_remaining": max(1, (available_at - now() + 86_399) // 86_400),
+                "previous_assessment_id": latest["id"],
+            })
+
+    def _participant_account(self, data: dict):
+        """Create an optional participant account.
+
+        Registration is never required: an anonymous participant keeps the same
+        result. An account exists so a participant can come back to their
+        result, roadmap and consultation request, and can invite colleagues.
+        It is a company-level account and can never be a platform role.
+        """
+        self._rate_limit("participant_account", 10, 3600)
+        name = str(data.get("full_name") or data.get("name") or "").strip()
+        email = _slug_email(data.get("email"))
+        password = str(data.get("password") or "")
+        token = str(data.get("participant_token") or "").strip()
+        if len(name) < 2 or not _valid_email(email):
+            raise APIError("valid_registration_data_required", 422)
+        if not _password_ok(password):
+            raise APIError("password_policy_failed", 422, {"minimum": 10, "requires": ["uppercase", "lowercase", "number"]})
+        db = connect()
+        try:
+            if db.execute("SELECT 1 FROM users WHERE lower(email)=?", (email,)).fetchone():
+                raise APIError("email_already_exists", 409)
+            session = self._participant_session(db, token) if token else None
+            if token and not session:
+                raise APIError("participant_session_invalid", 401)
+            timestamp = now()
+            db.execute("BEGIN IMMEDIATE")
+            if session:
+                # Claim the organisation the anonymous run already created, so
+                # the result the participant just saw becomes theirs.
+                assessment = db.execute(
+                    "SELECT organization_id FROM assessments WHERE id=?", (session["assessment_id"],)
+                ).fetchone()
+                organization_id = assessment["organization_id"]
+            else:
+                organization_name = str(data.get("organization_name") or "").strip()
+                if len(organization_name) < 2:
+                    raise APIError("organization_name_required", 422)
+                organization_id = db.execute(
+                    "INSERT INTO organizations(name,locale,data_origin,created_at) VALUES (?,?,?,?)",
+                    (organization_name, "ar", "REAL", timestamp),
+                ).lastrowid
+                db.execute(
+                    "INSERT INTO company_profiles(organization_id,completion,updated_at) VALUES (?,?,?)",
+                    (organization_id, 20, timestamp),
+                )
+            user_id = db.execute(
+                "INSERT INTO users(email,name,password_hash,preferred_language,verified,is_active,created_at) VALUES (?,?,?,?,1,1,?)",
+                (email, name, password_hash(password), "ar", timestamp),
+            ).lastrowid
+            db.execute(
+                "INSERT INTO memberships(user_id,organization_id,role,status) VALUES (?,?,?,?)",
+                (user_id, organization_id, "COMPANY_RESPONDENT", "ACTIVE"),
+            )
+            db.execute("INSERT INTO user_settings(user_id,locale) VALUES (?,?)", (user_id, "ar"))
+            if session and session["participant_id"]:
+                # Attach the account to the participant row that answered, which
+                # is what makes the assessment visible to them once signed in.
+                db.execute(
+                    "UPDATE participants SET user_id=?,full_name=COALESCE(full_name,?),email=COALESCE(email,?) WHERE id=?",
+                    (user_id, name, email, session["participant_id"]),
+                )
+            audit(db, user_id, "participant_account_created", "user", user_id, {
+                "organization_id": organization_id,
+                "claimed_assessment_id": session["assessment_id"] if session else None,
+            })
+            db.commit()
+            auth_token = self._new_session(db, user_id, organization_id)
+            db.commit()
+            return self.send_json({
+                "token": auth_token,
+                "user": {"id": user_id, "name": name, "email": email, "role": "COMPANY_RESPONDENT"},
+                "organization_id": organization_id,
+                "claimed_assessment_id": session["assessment_id"] if session else None,
+            }, 201)
+        finally:
+            db.close()
+
+    def _join_code_for(self, db, assessment_id: int, context):
+        """Issue a shareable code so colleagues can answer the same assessment."""
+        assessment = self._assessment(db, assessment_id, context)
+        if assessment["status"] == "COMPLETED":
+            raise APIError("assessment_locked", 409)
+        existing = db.execute(
+            """SELECT * FROM assessment_join_codes
+               WHERE assessment_id=? AND active=1 AND expires_at>? AND use_count<max_uses
+               ORDER BY id DESC LIMIT 1""",
+            (assessment_id, now()),
+        ).fetchone()
+        if existing:
+            return dict(existing)
+        # Unambiguous alphabet: no O/0 or I/1, because this is read aloud and
+        # retyped rather than clicked.
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        for _ in range(6):
+            code = "-".join(
+                "".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(2)
+            )
+            if not db.execute("SELECT 1 FROM assessment_join_codes WHERE code=?", (code,)).fetchone():
+                break
+        else:
+            raise APIError("join_code_unavailable", 503)
+        timestamp = now()
+        code_id = db.execute(
+            """INSERT INTO assessment_join_codes(code,assessment_id,organization_id,created_by_user_id,max_uses,use_count,active,expires_at,created_at)
+               VALUES (?,?,?,?,?,0,1,?,?)""",
+            (code, assessment_id, assessment["organization_id"], context["id"], 25,
+             timestamp + config.INVITATION_TTL, timestamp),
+        ).lastrowid
+        audit(db, context["id"], "join_code_issued", "assessment", assessment_id, {"code_id": code_id})
+        db.commit()
+        return dict(db.execute("SELECT * FROM assessment_join_codes WHERE id=?", (code_id,)).fetchone())
+
+    def _redeem_join_code(self, data: dict):
+        """Exchange a colleague's code for a participant session on that assessment."""
+        self._rate_limit("join_code", 20, 3600)
+        code = str(data.get("code") or "").strip().upper().replace(" ", "")
+        full_name = str(data.get("full_name") or "").strip()
+        if not code:
+            raise APIError("join_code_required", 422)
+        if len(full_name) < 2:
+            raise APIError("full_name_required", 422)
+        if not bool(data.get("service_consent")):
+            raise APIError("service_consent_required", 422)
+        db = connect()
+        try:
+            db.execute("BEGIN IMMEDIATE")
+            row = select_for_update(
+                db, "SELECT * FROM assessment_join_codes WHERE code=?", (code,)
+            )
+            if not row or not row["active"] or row["expires_at"] <= now() or row["use_count"] >= row["max_uses"]:
+                raise APIError("join_code_invalid_or_expired", 404)
+            assessment = db.execute(
+                "SELECT * FROM assessments WHERE id=?", (row["assessment_id"],)
+            ).fetchone()
+            if not assessment or assessment["status"] == "COMPLETED":
+                raise APIError("assessment_locked", 409)
+            timestamp = now()
+            participant_id = db.execute(
+                "INSERT INTO participants(organization_id,full_name,email,job_title,created_at) VALUES (?,?,?,?,?)",
+                (row["organization_id"], full_name[:160],
+                 (_slug_email(data.get("email")) if data.get("email") else None),
+                 (str(data.get("job_title") or "").strip() or None), timestamp),
+            ).lastrowid
+            db.execute("UPDATE participants SET research_id=? WHERE id=?", (f"P{participant_id:06d}", participant_id))
+            db.execute(
+                "INSERT INTO assessment_participants(assessment_id,participant_id,assessment_role,status) VALUES (?,?,?,?)",
+                (row["assessment_id"], participant_id, "RESPONDENT", "IN_PROGRESS"),
+            )
+            db.execute(
+                "INSERT INTO consents(participant_id,consent_type,consent_version,accepted,accepted_at) VALUES (?,?,?,1,?)",
+                (participant_id, "SERVICE_USE", "1.0", timestamp),
+            )
+            raw = secrets.token_urlsafe(36)
+            db.execute(
+                "INSERT INTO participant_sessions(token,participant_id,name,email,assessment_id,expires_at) VALUES (?,?,?,?,?,?)",
+                (token_hash(raw), participant_id, full_name[:160],
+                 (_slug_email(data.get("email")) if data.get("email") else ""),
+                 row["assessment_id"], timestamp + config.SESSION_TTL),
+            )
+            db.execute(
+                "UPDATE assessment_join_codes SET use_count=use_count+1 WHERE id=?", (row["id"],)
+            )
+            audit(db, None, "join_code_redeemed", "assessment", row["assessment_id"], {
+                "participant_id": participant_id, "code_id": row["id"],
+            })
+            db.commit()
+            return self.send_json({
+                "token": raw,
+                "assessment_id": row["assessment_id"],
+                "participant_id": participant_id,
+            }, 201)
+        finally:
+            db.close()
 
     def _public_maturity_levels(self) -> dict:
         """Serve the five stages for the public stage section and methodology page.
@@ -1957,6 +2165,11 @@ class API(BaseHTTPRequestHandler):
     def _assessments(self, method: str, path: str, data: dict, context):
         db = connect()
         try:
+            join_code = re.fullmatch(r"/api/assessments/(\d+)/join-code", path)
+            if join_code and method == "POST":
+                # Any participant on the assessment may invite a colleague to
+                # the same run; it adds a respondent, not a new cycle.
+                return self.send_json({"join_code": self._join_code_for(db, int(join_code.group(1)), context)}, 201)
             delete_match = re.fullmatch(r"/api/assessments/(\d+)", path)
             if delete_match and method == "DELETE":
                 # Destroying an assessment destroys scientific data: responses,
@@ -2052,6 +2265,11 @@ class API(BaseHTTPRequestHandler):
                 assessment_type = str(data.get("assessment_type") or "FULL").upper()
                 if assessment_type not in {"FULL", "REASSESSMENT", "PULSE"}:
                     raise APIError("invalid_assessment_type", 422)
+                # One measurement cycle per organisation. The platform manager
+                # is exempt, since operating the platform sometimes requires a
+                # run outside the cycle.
+                if context["role"] != "SUPER_ADMIN":
+                    self._assessment_cooldown(db, context["organization_id"])
                 version_id = int(data.get("instrument_version_id") or 0)
                 if version_id:
                     version = db.execute("SELECT * FROM instrument_versions WHERE id=? AND status IN ('PILOT','VALIDATED','PUBLISHED','published')", (version_id,)).fetchone()
