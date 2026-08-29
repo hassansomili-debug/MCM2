@@ -53,6 +53,12 @@ a { text-decoration: none; }
 .research-notice strong { color: #553d0e; }
 
 .card-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 18px; }
+/* A direct child of the grid with no explicit span would otherwise occupy a
+   single column out of twelve and render as an unreadable sliver. Four columns
+   is the sensible default; anything wanting another width still declares it. */
+.card-grid > .card:not([class*="span-"]),
+.card-grid > .panel:not([class*="span-"]),
+.card-grid > .empty-state:not([class*="span-"]) { grid-column: span 4; }
 .card, .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 22px; box-shadow: 0 8px 30px rgba(11,31,51,.035); }
 .span-3 { grid-column: span 3; }
 .span-4 { grid-column: span 4; }
@@ -517,6 +523,9 @@ dialog::backdrop { background: rgba(5,19,31,.58); backdrop-filter: blur(3px); }
 @media (max-width: 1100px) {
   .span-3 { grid-column: span 6; }
   .span-4 { grid-column: span 6; }
+  .card-grid > .card:not([class*="span-"]),
+  .card-grid > .panel:not([class*="span-"]),
+  .card-grid > .empty-state:not([class*="span-"]) { grid-column: span 6; }
   .span-5, .span-7 { grid-column: span 12; }
   .roadmap-board { grid-template-columns: 1fr; }
   .dashboard-hero { grid-template-columns:1fr; }
@@ -547,6 +556,9 @@ dialog::backdrop { background: rgba(5,19,31,.58); backdrop-filter: blur(3px); }
 @media (max-width: 680px) {
   .card-grid { display: grid; grid-template-columns: 1fr; }
   .span-3, .span-4, .span-5, .span-6, .span-7, .span-8, .span-12 { grid-column: 1; }
+  .card-grid > .card:not([class*="span-"]),
+  .card-grid > .panel:not([class*="span-"]),
+  .card-grid > .empty-state:not([class*="span-"]) { grid-column: 1; }
   .form-grid { grid-template-columns: 1fr; }
   .field.full { grid-column: 1; }
   .page-heading { align-items: stretch; }
@@ -698,3 +710,8 @@ dialog::backdrop { background: rgba(5,19,31,.58); backdrop-filter: blur(3px); }
 .corr-cell small { color: var(--muted); font-size: 11px; }
 .correlation-headline { font-size: 18px; }
 .suppressed { color: #8b5d0b; background: #fff4d9; padding: 5px 9px; border-radius: 9px; font-size: 12px; }
+
+/* Priority score: a bare number beside the title read as a stray figure. */
+.priority-score { display: grid; gap: 2px; justify-items: flex-end; text-align: end; white-space: nowrap; }
+.priority-score small { color: var(--muted); font-size: 11px; }
+.priority-score b { color: var(--navy); font: 700 22px/1 "Space Grotesk", sans-serif; }

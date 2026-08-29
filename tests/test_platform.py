@@ -1224,6 +1224,23 @@ class PostgresAdapterTests(unittest.TestCase):
             self.assertTrue(returns_id, f"{table} must return its generated id")
             self.assertTrue(query.endswith("RETURNING id"))
 
+    def test_grid_children_without_a_span_have_a_default_width(self):
+        """Guard the layout bug that squeezed the priorities page.
+
+        `.card-grid` is a twelve-column grid. A child with no `span-*` class
+        occupies one column and renders as an unreadable sliver, which is what
+        happened to the priorities, diagnoses and notifications pages. The
+        stylesheet must give such children a default, at every breakpoint.
+        """
+        css = (Path(__file__).parents[1] / "platform.css").read_text(encoding="utf-8")
+        default_rule = '.card-grid > .card:not([class*="span-"])'
+        self.assertIn(default_rule, css)
+        # One base rule plus one per responsive breakpoint that remaps spans.
+        self.assertEqual(3, css.count(default_rule))
+        breakpoints = css.count(".span-4 { grid-column: span 6; }") + css.count(
+            ".span-3, .span-4, .span-5, .span-6, .span-7, .span-8, .span-12 { grid-column: 1; }")
+        self.assertEqual(2, breakpoints, "a breakpoint remaps spans without remapping the default")
+
     def test_client_script_is_syntactically_valid(self):
         """Parse app.js with a real JavaScript engine.
 

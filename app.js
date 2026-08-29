@@ -684,7 +684,7 @@ async function renderGaps(route) {
 async function renderPriorities(route) {
   const id = Number(route.parts[1]) || await latestCompletedId(); if (!id) return navigate('assessments');
   loading(); const data = await api(`/api/priorities/${id}`);
-  const cards = data.priorities.map(item => `<article class="card"><div class="card-title"><div><span class="status-badge">الأولوية ${number(item.rank)}</span><h3>${e(item.problem)}</h3><p>${e(item.dimension_code)}</p></div><strong>${number(item.priority_score,1)}</strong></div><p>${e(item.action)}</p><div class="pill-list"><span>الحالي ${number(item.current_score,1)}</span><span>الفجوة ${number(item.gap,1)}</span><span>المالك ${e(item.suggested_owner)}</span><span>الجهد ${e(item.effort)}</span></div></article>`).join('');
+  const cards = data.priorities.map(item => `<article class="card"><div class="card-title"><div><span class="status-badge">الأولوية ${number(item.rank)}</span><h3>${e(item.problem)}</h3><p>${e(item.dimension_code)}</p></div><span class="priority-score"><small>درجة الأولوية</small><b>${number(item.priority_score,1)}</b></span></div><p>${e(item.action)}</p><div class="pill-list"><span>الحالي ${number(item.current_score,1)}</span><span>الفجوة ${number(item.gap,1)}</span><span>المالك ${e(item.suggested_owner)}</span><span>الجهد ${e(item.effort)}</span></div></article>`).join('');
   appView.innerHTML = `<div class="page">${pageHeading(`التقييم #${id}`,'أولويات التطوير','ترتيب حتمي قابل للتدقيق، ولا تدخل الفجوات السالبة في الأولوية.',`<a class="secondary-button" href="#gaps/${id}">الفجوات</a><a class="primary-button" href="#roadmap/${id}">تحويلها إلى خطة</a>`)}<div class="card-grid">${cards || emptyState('لا توجد أولويات', 'لم تُولد توصيات قابلة للترتيب لهذا الإصدار.')}</div></div>`;
 }
 
