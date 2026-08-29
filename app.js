@@ -850,9 +850,30 @@ async function renderConsultations() {
 
 async function renderAdmin() {
   loading(); const [overview,users,organizations] = await Promise.all([api('/api/admin'),api('/api/admin/users'),api('/api/admin/organizations')]);
-  const userRows = users.users.map(item => `<div class="data-table__row"><strong>${e(item.name)}<small>${e(item.email)}</small></strong><span>${e(roleLabels[item.role] || item.role || '--')}</span><span>${e(item.organization_name || '--')}</span><span>${badge(item.is_active ? 'نشط':'معطل',item.is_active ? '':'danger')}</span><span class="button-row"><button class="secondary-button" data-action="toggle-user" data-id="${item.id}" data-active="${item.is_active ? '1':'0'}">${item.is_active ? 'تعطيل':'تفعيل'}</button><button class="danger-button" data-action="delete-user" data-id="${item.id}" data-name="${e(item.name || '')}" data-email="${e(item.email || '')}">حذف</button></span></div>`);
+  const roleOptions = ['COMPANY_RESPONDENT','COMPANY_ADMIN','CONSULTANT','RESEARCHER','SUPER_ADMIN'];
+  // One row per account. The flat join used to render a row per membership,
+  // which looked like several duplicate accounts sharing one email.
+  const userRows = users.users.map(item => {
+    const memberships = (item.memberships || []).map(membership => `<li>
+      <b>${e(membership.organization_name || `#${membership.organization_id}`)}</b>
+      <select data-action="membership-role" data-user="${item.id}" data-org="${membership.organization_id}" data-previous-role="${e(membership.role || '')}" aria-label="دور ${e(item.name)} في ${e(membership.organization_name || '')}">
+        ${roleOptions.map(value=>`<option value="${value}" ${membership.role === value ? 'selected':''}>${e(roleLabels[value] || value)}</option>`).join('')}
+      </select>
+      <button class="danger-button" data-action="remove-membership" data-user="${item.id}" data-org="${membership.organization_id}" data-name="${e(item.name || '')}" data-org-name="${e(membership.organization_name || '')}" type="button">إزالة من المؤسسة</button>
+    </li>`).join('') || '<li class="dashboard-empty">لا توجد عضويات.</li>';
+    return `<div class="data-table__row user-row">
+      <strong>${e(item.name)}<small>${e(item.email)}</small></strong>
+      <span>${badge(item.is_active ? 'نشط':'معطل', item.is_active ? '':'danger')}</span>
+      <span>${number((item.memberships || []).length)} عضوية</span>
+      <span class="membership-list"><ul>${memberships}</ul></span>
+      <span class="button-row">
+        <button class="secondary-button" data-action="toggle-user" data-id="${item.id}" data-active="${item.is_active ? '1':'0'}">${item.is_active ? 'تعطيل':'تفعيل'}</button>
+        <button class="danger-button" data-action="delete-user" data-id="${item.id}" data-name="${e(item.name || '')}" data-email="${e(item.email || '')}">حذف الحساب</button>
+      </span>
+    </div>`;
+  });
   const options = organizations.organizations.map(item => `<option value="${item.id}">${e(item.name)}</option>`).join('');
-  appView.innerHTML = `<div class="page">${pageHeading('إدارة المنصة','لوحة المدير العام','إدارة المستخدمين والمنظمات والإعدادات التشغيلية.')}<div class="card-grid"><article class="card metric-card span-3"><small>المؤسسات</small><strong>${number(overview.organizations)}</strong></article><article class="card metric-card span-3"><small>المستخدمون</small><strong>${number(overview.users)}</strong></article><article class="card metric-card span-3"><small>التقييمات</small><strong>${number(overview.assessments)}</strong></article><article class="card metric-card span-3"><small>الجلسات النشطة</small><strong>${number(overview.active_sessions)}</strong></article><section class="card span-12"><div class="card-title"><div><h2>إنشاء مستخدم</h2><p>تعيين مؤسسة ودور واضحين.</p></div></div><form id="admin-user-form" class="form-grid"><label class="field"><span>الاسم</span><input name="name" required></label><label class="field"><span>البريد</span><input name="email" type="email" required></label><label class="field"><span>كلمة المرور</span><input name="password" type="password" minlength="10" required></label><label class="field"><span>المؤسسة</span><select name="organization_id">${options}</select></label><label class="field full"><span>الدور</span><select name="role"><option value="COMPANY_RESPONDENT">مشارك شركة</option><option value="COMPANY_ADMIN">مدير شركة</option><option value="CONSULTANT">استشاري</option><option value="RESEARCHER">باحث</option><option value="SUPER_ADMIN">مدير المنصة</option></select></label><button class="primary-button full">إنشاء المستخدم</button></form></section></div><section class="panel">${table(['المستخدم','الدور','المؤسسة','الحالة',''],userRows,5,820)}</section><section class="card"><h2>إعدادات النظام</h2><div class="pill-list">${Object.entries(overview.configuration).map(([key,value]) => `<span>${e(key)}: ${e(typeof value === 'object' ? JSON.stringify(value) : value)}</span>`).join('')}</div></section></div>`;
+  appView.innerHTML = `<div class="page">${pageHeading('إدارة المنصة','لوحة المدير العام','إدارة المستخدمين والمنظمات والإعدادات التشغيلية.')}<div class="card-grid"><article class="card metric-card span-3"><small>المؤسسات</small><strong>${number(overview.organizations)}</strong></article><article class="card metric-card span-3"><small>المستخدمون</small><strong>${number(overview.users)}</strong></article><article class="card metric-card span-3"><small>التقييمات</small><strong>${number(overview.assessments)}</strong></article><article class="card metric-card span-3"><small>الجلسات النشطة</small><strong>${number(overview.active_sessions)}</strong></article><section class="card span-12"><div class="card-title"><div><h2>إنشاء مستخدم</h2><p>تعيين مؤسسة ودور واضحين.</p></div></div><form id="admin-user-form" class="form-grid"><label class="field"><span>الاسم</span><input name="name" required></label><label class="field"><span>البريد</span><input name="email" type="email" required></label><label class="field"><span>كلمة المرور</span><input name="password" type="password" minlength="10" required></label><label class="field"><span>المؤسسة</span><select name="organization_id">${options}</select></label><label class="field full"><span>الدور</span><select name="role"><option value="COMPANY_RESPONDENT">مشارك شركة</option><option value="COMPANY_ADMIN">مدير شركة</option><option value="CONSULTANT">استشاري</option><option value="RESEARCHER">باحث</option><option value="SUPER_ADMIN">مدير المنصة</option></select></label><button class="primary-button full">إنشاء المستخدم</button></form></section></div><section class="panel"><div class="card-title"><div><h2>الحسابات والعضويات</h2><p>الحساب واحد وقد ينتمي لعدة مؤسسات. إزالة العضوية تُلغي وصوله لتلك المؤسسة وحدها؛ حذف الحساب يُلغيه بالكامل ولا يمس تقييمات المؤسسات.</p></div></div>${table(['المستخدم','الحالة','العضويات','المؤسسات والأدوار',''],userRows,5,1080)}</section><section class="card"><h2>إعدادات النظام</h2><div class="pill-list">${Object.entries(overview.configuration).map(([key,value]) => `<span>${e(key)}: ${e(typeof value === 'object' ? JSON.stringify(value) : value)}</span>`).join('')}</div></section></div>`;
 }
 
 function queueAnswer(itemId, value, missingType = null) {
@@ -922,9 +943,25 @@ async function fileAsBase64(file) {
   return btoa(binary);
 }
 
-document.addEventListener('change', event => {
+document.addEventListener('change', async event => {
   if (event.target.matches('#assessment-form input[type="radio"][data-answer-input]')) queueAnswer(event.target.dataset.itemId,Number(event.target.value));
   if (event.target.matches('#assessment-form input[type="number"][data-answer-input]')) queueAnswer(event.target.dataset.itemId,event.target.value === '' ? null : Number(event.target.value),event.target.value === '' ? 'NOT_ANSWERED' : null);
+  if (event.target.matches('select[data-action="membership-role"]')) {
+    const select = event.target;
+    const previous = select.dataset.previousRole || '';
+    select.disabled = true;
+    try {
+      await api(`/api/admin/users/${select.dataset.user}/memberships/${select.dataset.org}`,{method:'PATCH',body:JSON.stringify({role:select.value})});
+      select.dataset.previousRole = select.value;
+      showToast('حُدّث الدور في هذه المؤسسة.');
+    } catch (error) {
+      // Put the control back where it was, so the screen never shows a role
+      // the server refused to store.
+      if (previous) select.value = previous;
+      showToast(apiMessage(error),'error');
+    }
+    select.disabled = false;
+  }
 });
 document.addEventListener('input', event => {
   if (event.target.matches('#assessment-form textarea[data-answer-input]')) queueAnswer(event.target.dataset.itemId,event.target.value || null,event.target.value ? null : 'NOT_ANSWERED');
@@ -1018,6 +1055,14 @@ document.addEventListener('click', async event => {
       button.disabled = true;
       const result = await api(`/api/assessments/${button.dataset.id}`,{method:'DELETE'});
       closeDialog(); showToast(`حُذف التقييم #${result.assessment_id} وسُجّل في التدقيق.`); router();
+    }
+    else if (action === 'remove-membership') {
+      openDialog(`<h2 id="dialog-title">إزالة عضوية</h2><p>${e(button.dataset.name || '')} من <b>${e(button.dataset.orgName || '')}</b></p><p class="classification-boundary">يفقد الحساب وصوله إلى هذه المؤسسة فقط. الحساب وعضوياته الأخرى وتقييمات المؤسسة تبقى كما هي.</p><div class="button-row"><button class="danger-button" data-action="confirm-remove-membership" data-user="${e(button.dataset.user)}" data-org="${e(button.dataset.org)}" type="button">تأكيد الإزالة</button><button class="secondary-button" data-action="close-dialog">إلغاء</button></div>`);
+    }
+    else if (action === 'confirm-remove-membership') {
+      button.disabled = true;
+      await api(`/api/admin/users/${button.dataset.user}/memberships/${button.dataset.org}`,{method:'DELETE'});
+      closeDialog(); showToast('أُزيلت العضوية وسُجّلت في التدقيق.'); router();
     }
     else if (action === 'delete-user') {
       openDialog(`<h2 id="dialog-title">حذف المستخدم</h2><p>${e(button.dataset.name || '')} · ${e(button.dataset.email || '')}</p><p class="classification-boundary">سيُحذف الحساب وعضوياته وجلساته وإشعاراته. لن تُحذف تقييمات المؤسسة ولا إجاباتها، لأنها بيانات المنشأة لا بيانات الشخص.</p><div class="button-row"><button class="danger-button" data-action="confirm-delete-user" data-id="${e(button.dataset.id)}" type="button">تأكيد الحذف</button><button class="secondary-button" data-action="close-dialog">إلغاء</button></div>`);

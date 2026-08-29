@@ -497,6 +497,85 @@ class PlatformJourneyTests(unittest.TestCase):
         self.assertEqual(before, metadata["deleted_rows"]["responses"])
         self.assertIn("organization_name", metadata)
 
+    def test_memberships_are_managed_per_organisation_without_touching_the_account(self):
+        admin = self.login()
+        self.request("POST", "/api/auth/register", {
+            "name": "عضو متعدد", "email": "multi-org@example.test",
+            "password": "MultiOrgUser2026", "organization_name": "المؤسسة الأولى للعضويات",
+            "service_consent": True,
+        }, expected=201)
+        users = self.request("GET", "/api/admin/users", token=admin)["users"]
+        account = next(u for u in users if u["email"] == "multi-org@example.test")
+        user_id = account["id"]
+        first_org = account["memberships"][0]["organization_id"]
+
+        # One account is one row, with its organisations nested. The previous
+        # flat shape rendered the same person once per membership.
+        self.assertEqual(1, sum(1 for u in users if u["email"] == "multi-org@example.test"))
+        self.assertEqual(1, len(account["memberships"]))
+
+        organizations = self.request("GET", "/api/admin/organizations", token=admin)["organizations"]
+        second_org = next(o["id"] for o in organizations if o["id"] != first_org)
+        self.request("PATCH", f"/api/admin/users/{user_id}", {
+            "organization_id": second_org, "role": "CONSULTANT",
+        }, token=admin)
+
+        account = next(u for u in self.request("GET", "/api/admin/users", token=admin)["users"] if u["id"] == user_id)
+        self.assertEqual(2, len(account["memberships"]))
+
+        # Changing a role in one organisation leaves the other untouched.
+        self.request("PATCH", f"/api/admin/users/{user_id}/memberships/{first_org}",
+                     {"role": "COMPANY_RESPONDENT"}, token=admin)
+        account = next(u for u in self.request("GET", "/api/admin/users", token=admin)["users"] if u["id"] == user_id)
+        roles = {m["organization_id"]: m["role"] for m in account["memberships"]}
+        self.assertEqual("COMPANY_RESPONDENT", roles[first_org])
+        self.assertEqual("CONSULTANT", roles[second_org])
+
+        self.assertEqual("invalid_role", self.request(
+            "PATCH", f"/api/admin/users/{user_id}/memberships/{first_org}",
+            {"role": "WIZARD"}, token=admin, expected=422)["error"])
+
+        # Removing one membership keeps the account and its other membership.
+        self.request("DELETE", f"/api/admin/users/{user_id}/memberships/{first_org}", token=admin)
+        account = next(u for u in self.request("GET", "/api/admin/users", token=admin)["users"] if u["id"] == user_id)
+        self.assertEqual([second_org], [m["organization_id"] for m in account["memberships"]])
+
+        from mcm import database
+        with database.transaction() as db:
+            self.assertIsNotNone(db.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone())
+            record = db.execute(
+                "SELECT metadata_json FROM audit_logs WHERE action='membership_removed' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(record, "a membership removal must be audited")
+        self.assertFalse(json.loads(record["metadata_json"])["account_deleted"])
+
+        self.assertEqual("membership_not_found", self.request(
+            "DELETE", f"/api/admin/users/{user_id}/memberships/{first_org}",
+            token=admin, expected=404)["error"])
+
+    def test_the_last_platform_administrator_membership_cannot_be_removed(self):
+        admin = self.login()
+        me = self.request("GET", "/api/me", token=admin)["user"]
+        account = next(u for u in self.request("GET", "/api/admin/users", token=admin)["users"] if u["id"] == me["id"])
+        super_admin_orgs = [m["organization_id"] for m in account["memberships"] if m["role"] == "SUPER_ADMIN"]
+        self.assertTrue(super_admin_orgs)
+
+        # Removing them one at a time must stop before the platform is left
+        # without an administrator, whether by removal or by demotion.
+        for organization_id in super_admin_orgs[:-1]:
+            self.request("DELETE", f"/api/admin/users/{me['id']}/memberships/{organization_id}", token=admin)
+        last = super_admin_orgs[-1]
+        # Tidying your own memberships keeps you signed in, moving the session
+        # to a workspace you still belong to.
+        self.assertEqual("SUPER_ADMIN", self.request("GET", "/api/me", token=admin)["user"]["role"])
+        self.assertEqual("last_platform_administrator", self.request(
+            "DELETE", f"/api/admin/users/{me['id']}/memberships/{last}", token=admin, expected=409)["error"])
+        self.assertEqual("last_platform_administrator", self.request(
+            "PATCH", f"/api/admin/users/{me['id']}/memberships/{last}",
+            {"role": "COMPANY_RESPONDENT"}, token=admin, expected=409)["error"])
+        # The account still works after the refusals.
+        self.assertEqual("SUPER_ADMIN", self.request("GET", "/api/me", token=admin)["user"]["role"])
+
     def test_user_deletion_guards_the_platform_and_spares_organisation_data(self):
         admin = self.login()
         me = self.request("GET", "/api/me", token=admin)

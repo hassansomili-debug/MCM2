@@ -660,3 +660,12 @@ dialog::backdrop { background: rgba(5,19,31,.58); backdrop-filter: blur(3px); }
 .hero-rationale p strong { color: var(--navy); }
 .hero-rationale .hero-rationale-model { padding-block-start: 14px; border-block-start: 1px solid rgba(11,39,79,.1); color: #5b6d7a; font-size: 13px; }
 .hero-rationale > small { color: #7c8b96; font-size: 12px; }
+
+/* Account rows list their memberships, so one account with several
+   organisations reads as one person rather than several duplicates. */
+.user-row .membership-list ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+.user-row .membership-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 12px; background: #fbfdfd; }
+.user-row .membership-list li b { min-width: 130px; color: var(--navy); font-size: 13px; }
+.user-row .membership-list select { min-height: 36px; padding: 5px 9px; border: 1px solid #cfdadd; border-radius: 9px; background: #fff; font-size: 12px; }
+.user-row .membership-list .danger-button { min-height: 34px; padding: 5px 11px; font-size: 12px; }
+.user-row .membership-list .dashboard-empty { border: 0; background: transparent; color: var(--muted); font-size: 12px; }

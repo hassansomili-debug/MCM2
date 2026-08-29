@@ -2235,7 +2235,27 @@ class API(BaseHTTPRequestHandler):
                 return self.send_json({"organizations": [dict(row) for row in rows]})
             if path == "/api/admin/users" and method == "GET":
                 rows = db.execute("SELECT u.id,u.name,u.email,u.job_title,u.is_active,u.created_at,m.organization_id,m.role,m.status,o.name AS organization_name FROM users u LEFT JOIN memberships m ON m.user_id=u.id LEFT JOIN organizations o ON o.id=m.organization_id ORDER BY u.id DESC").fetchall()
-                return self.send_json({"users": [dict(row) for row in rows]})
+                # One row per account, memberships nested. The flat join
+                # produced a row per membership, which read as several duplicate
+                # accounts sharing one email and made a per-organisation action
+                # impossible to express.
+                grouped: dict[int, dict] = {}
+                for row in rows:
+                    account = grouped.setdefault(row["id"], {
+                        "id": row["id"], "name": row["name"], "email": row["email"],
+                        "job_title": row["job_title"], "is_active": row["is_active"],
+                        "created_at": row["created_at"], "memberships": [],
+                    })
+                    if row["organization_id"]:
+                        account["memberships"].append({
+                            "organization_id": row["organization_id"],
+                            "organization_name": row["organization_name"],
+                            "role": row["role"],
+                            "status": row["status"],
+                        })
+                users = list(grouped.values())
+                # Flat rows remain for any caller still reading the old shape.
+                return self.send_json({"users": users, "rows": [dict(row) for row in rows]})
             if path == "/api/admin/users" and method == "POST":
                 email = _slug_email(data.get("email"))
                 name = str(data.get("name") or "").strip()
@@ -2269,6 +2289,91 @@ class API(BaseHTTPRequestHandler):
                 audit(db, context["id"], "update", "user", user_id, {"is_active": bool(is_active)})
                 db.commit()
                 return self.send_json({"id": user_id, "is_active": bool(is_active)})
+            membership = re.fullmatch(r"/api/admin/users/(\d+)/memberships/(\d+)", path)
+            if membership and method in {"DELETE", "PATCH"}:
+                user_id, organization_id = int(membership.group(1)), int(membership.group(2))
+                row = db.execute(
+                    """SELECT m.role,u.email,u.name,o.name AS organization_name
+                       FROM memberships m JOIN users u ON u.id=m.user_id
+                       LEFT JOIN organizations o ON o.id=m.organization_id
+                       WHERE m.user_id=? AND m.organization_id=?""",
+                    (user_id, organization_id),
+                ).fetchone()
+                if not row:
+                    raise APIError("membership_not_found", 404)
+
+                def _would_orphan_platform(excluded_org: int | None) -> bool:
+                    """True when this change removes the last active SUPER_ADMIN."""
+                    if row["role"] != "SUPER_ADMIN":
+                        return False
+                    clause = "AND NOT (m.user_id=? AND m.organization_id=?)"
+                    remaining = db.execute(
+                        f"""SELECT COUNT(*) FROM memberships m JOIN users u ON u.id=m.user_id
+                            WHERE m.role='SUPER_ADMIN' AND u.is_active=1 {clause}""",
+                        (user_id, excluded_org),
+                    ).fetchone()[0]
+                    return remaining == 0
+
+                if method == "DELETE":
+                    if _would_orphan_platform(organization_id):
+                        raise APIError("last_platform_administrator", 409)
+                    remaining = [
+                        int(other["organization_id"])
+                        for other in db.execute(
+                            "SELECT organization_id FROM memberships WHERE user_id=? AND organization_id!=? ORDER BY organization_id",
+                            (user_id, organization_id),
+                        )
+                    ]
+                    own = int(user_id) == int(context["id"])
+                    # Tidying your own memberships must not lock you out of the
+                    # platform, so the last one is refused rather than removed.
+                    if own and not remaining:
+                        raise APIError("cannot_remove_last_own_membership", 409)
+                    # Removing an account's access to one organisation must not
+                    # touch the account itself or any other organisation.
+                    db.execute(
+                        "DELETE FROM memberships WHERE user_id=? AND organization_id=?",
+                        (user_id, organization_id),
+                    )
+                    if own:
+                        # Keep the administrator signed in by moving the active
+                        # session to a workspace they still belong to.
+                        db.execute(
+                            "UPDATE sessions SET active_org_id=? WHERE user_id=? AND active_org_id=?",
+                            (remaining[0], user_id, organization_id),
+                        )
+                    else:
+                        # Revoke immediately: sessions scoped to that workspace
+                        # end, sessions in other organisations keep working.
+                        db.execute(
+                            "DELETE FROM sessions WHERE user_id=? AND active_org_id=?",
+                            (user_id, organization_id),
+                        )
+                    audit(db, context["id"], "membership_removed", "membership", user_id, {
+                        "organization_id": organization_id,
+                        "organization_name": row["organization_name"],
+                        "removed_role": row["role"],
+                        "email": row["email"],
+                        "account_deleted": False,
+                    })
+                    db.commit()
+                    return self.send_json({"removed": True, "user_id": user_id, "organization_id": organization_id})
+
+                target_role = _role(data.get("role"))
+                if row["role"] == "SUPER_ADMIN" and target_role != "SUPER_ADMIN" and _would_orphan_platform(organization_id):
+                    raise APIError("last_platform_administrator", 409)
+                db.execute(
+                    "UPDATE memberships SET role=? WHERE user_id=? AND organization_id=?",
+                    (target_role, user_id, organization_id),
+                )
+                audit(db, context["id"], "membership_role_changed", "membership", user_id, {
+                    "organization_id": organization_id,
+                    "organization_name": row["organization_name"],
+                    "previous_role": row["role"],
+                    "new_role": target_role,
+                })
+                db.commit()
+                return self.send_json({"user_id": user_id, "organization_id": organization_id, "role": target_role})
             delete_user = re.fullmatch(r"/api/admin/users/(\d+)", path)
             if delete_user and method == "DELETE":
                 user_id = int(delete_user.group(1))
