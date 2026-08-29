@@ -649,3 +649,14 @@ dialog::backdrop { background: rgba(5,19,31,.58); backdrop-filter: blur(3px); }
   .consultation-cta { grid-template-columns:1fr; }
   .consultation-cta .button-row { flex-wrap:wrap; }
 }
+
+/* Hero rationale replaces the conceptual diagram: the same slot now carries
+   why maturity matters and how improving it shows up in marketing work. */
+.hero-rationale { position: relative; display: grid; gap: 14px; align-content: start; padding: 34px; border: 1px solid rgba(11,39,79,.12); border-radius: 32px; background: linear-gradient(145deg,#fff,#edf7f8); box-shadow: 0 30px 80px rgba(11,39,79,.12); overflow: hidden; }
+.hero-rationale::before { content:""; position: absolute; width: 210px; height: 210px; border-radius: 50%; inset-block-start: -110px; inset-inline-end: -80px; background: rgba(7,139,137,.1); }
+.hero-rationale > * { position: relative; z-index: 1; }
+.hero-rationale .eyebrow { color: var(--teal-dark); font-size: 13px; font-weight: 800; letter-spacing: 0; }
+.hero-rationale p { margin: 0; color: #435563; font-size: 14px; line-height: 2; }
+.hero-rationale p strong { color: var(--navy); }
+.hero-rationale .hero-rationale-model { padding-block-start: 14px; border-block-start: 1px solid rgba(11,39,79,.1); color: #5b6d7a; font-size: 13px; }
+.hero-rationale > small { color: #7c8b96; font-size: 12px; }

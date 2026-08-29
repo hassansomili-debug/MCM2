@@ -56,6 +56,28 @@ ALLOWED_MISSING = {"NOT_APPLICABLE", "DONT_KNOW"}
 ROADMAP_STATUSES = {"NOT_STARTED", "IN_PROGRESS", "COMPLETED", "DEFERRED"}
 PRIVILEGED_ASSESSMENT_ROLES = {"COMPANY_ADMIN", "CONSULTANT", "SUPER_ADMIN"}
 RESEARCH_ROLES = {"RESEARCHER", "SUPER_ADMIN"}
+# Every table keyed by assessment_id, ordered so dependants are removed first.
+# Deleting an assessment must not leave an orphan score run or roadmap item.
+ASSESSMENT_CHILD_TABLES = (
+    "roadmap_items",
+    "assessment_recommendations",
+    "diagnostic_results",
+    "data_quality_flags",
+    "dimension_scores",
+    "assessment_scores",
+    "scores",
+    "reports",
+    "responses",
+    "answers",
+    "assessment_context",
+    "assessment_participants",
+    "participant_sessions",
+    "invitations",
+    "score_runs",
+)
+# These hang off score_runs, not off the assessment, and must be cleared before
+# the runs themselves.
+SCORE_RUN_CHILD_TABLES = ("response_item_scores", "score_run_dimensions", "score_run_totals")
 _RATE_LIMITS: dict[str, deque] = defaultdict(deque)
 
 # The approved public description of the model. It states the evidentiary basis
@@ -1723,6 +1745,50 @@ class API(BaseHTTPRequestHandler):
     def _assessments(self, method: str, path: str, data: dict, context):
         db = connect()
         try:
+            delete_match = re.fullmatch(r"/api/assessments/(\d+)", path)
+            if delete_match and method == "DELETE":
+                # Destroying an assessment destroys scientific data: responses,
+                # score runs, diagnostics and the roadmap derived from them.
+                # Restricted to the platform administrator, recorded in full
+                # before the rows are removed, and never reachable by a company
+                # administrator or a consultant.
+                self.require_roles(context, {"SUPER_ADMIN"})
+                assessment_id = int(delete_match.group(1))
+                assessment = db.execute("SELECT * FROM assessments WHERE id=?", (assessment_id,)).fetchone()
+                if not assessment:
+                    raise APIError("assessment_not_found", 404)
+                counts = {
+                    table: db.execute(f"SELECT COUNT(*) FROM {table} WHERE assessment_id=?", (assessment_id,)).fetchone()[0]
+                    for table in ASSESSMENT_CHILD_TABLES
+                }
+                organization = db.execute(
+                    "SELECT name FROM organizations WHERE id=?", (assessment["organization_id"],)
+                ).fetchone()
+                audit(db, context["id"], "assessment_deleted", "assessment", assessment_id, {
+                    "organization_id": assessment["organization_id"],
+                    "organization_name": organization["name"] if organization else None,
+                    "status": assessment["status"],
+                    "data_origin": assessment["data_origin"],
+                    "version_id": assessment["version_id"],
+                    "completed_at": assessment["completed_at"],
+                    "deleted_rows": counts,
+                })
+                for table in SCORE_RUN_CHILD_TABLES:
+                    db.execute(
+                        f"DELETE FROM {table} WHERE score_run_id IN (SELECT id FROM score_runs WHERE assessment_id=?)",
+                        (assessment_id,),
+                    )
+                for table in ASSESSMENT_CHILD_TABLES:
+                    db.execute(f"DELETE FROM {table} WHERE assessment_id=?", (assessment_id,))
+                db.execute(
+                    "DELETE FROM consultation_lead_events WHERE consultation_lead_id IN (SELECT id FROM consultation_leads WHERE assessment_id=?)",
+                    (assessment_id,),
+                )
+                db.execute("DELETE FROM consultation_leads WHERE assessment_id=?", (assessment_id,))
+                db.execute("UPDATE assessments SET parent_assessment_id=NULL WHERE parent_assessment_id=?", (assessment_id,))
+                db.execute("DELETE FROM assessments WHERE id=?", (assessment_id,))
+                db.commit()
+                return self.send_json({"deleted": True, "assessment_id": assessment_id, "removed": counts})
             ai_plan_match = re.fullmatch(r"/api/assessments/(\d+)/ai-plan", path)
             if ai_plan_match and method == "POST":
                 self.require_roles(context, PRIVILEGED_ASSESSMENT_ROLES)
@@ -2118,6 +2184,43 @@ class API(BaseHTTPRequestHandler):
         self.require_roles(context, {"SUPER_ADMIN"})
         db = connect()
         try:
+            if path == "/api/admin/consultations" and method == "GET":
+                rows = db.execute(
+                    """SELECT c.*,o.name AS organization_display,u.name AS consultant_name,
+                              MAX(CASE WHEN s.construct='MCM' THEN s.total_score END) AS mcm_total,
+                              MAX(CASE WHEN s.construct='SMCE' THEN s.total_score END) AS smce_total,
+                              m.label_ar AS maturity_label
+                       FROM consultation_leads c
+                       LEFT JOIN organizations o ON o.id=c.organization_id
+                       LEFT JOIN users u ON u.id=c.assigned_consultant_id
+                       LEFT JOIN assessment_scores s ON s.assessment_id=c.assessment_id
+                       LEFT JOIN maturity_levels m ON m.id=s.maturity_level_id
+                       WHERE c.deleted_at IS NULL
+                       GROUP BY c.id,o.name,u.name,m.label_ar
+                       ORDER BY c.created_at DESC"""
+                ).fetchall()
+                leads = []
+                for row in rows:
+                    # Scores are read from the linked assessment, never copied
+                    # into a free-text field on the lead.
+                    payload = self._consultation_payload(row, include_contact=True)
+                    payload.update({
+                        "organization_display": row["organization_display"],
+                        "consultant_name": row["consultant_name"],
+                        "mcm_total": row["mcm_total"],
+                        "smce_total": row["smce_total"],
+                        "maturity_label": row["maturity_label"],
+                    })
+                    leads.append(payload)
+                counts = {status: 0 for status in CONSULTATION_STATUSES}
+                for lead in leads:
+                    counts[lead["status"]] = counts.get(lead["status"], 0) + 1
+                return self.send_json({
+                    "leads": leads,
+                    "counts": counts,
+                    "unassigned": sum(1 for lead in leads if not lead["assigned_consultant_id"]),
+                    "statuses": list(CONSULTATION_STATUSES),
+                })
             if path == "/api/admin" and method == "GET":
                 return self.send_json({
                     "organizations": db.execute("SELECT COUNT(*) FROM organizations").fetchone()[0],
@@ -2166,6 +2269,38 @@ class API(BaseHTTPRequestHandler):
                 audit(db, context["id"], "update", "user", user_id, {"is_active": bool(is_active)})
                 db.commit()
                 return self.send_json({"id": user_id, "is_active": bool(is_active)})
+            delete_user = re.fullmatch(r"/api/admin/users/(\d+)", path)
+            if delete_user and method == "DELETE":
+                user_id = int(delete_user.group(1))
+                user = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+                if not user:
+                    raise APIError("user_not_found", 404)
+                # Two guards that matter: an administrator cannot delete their
+                # own account, and the platform cannot be left without one.
+                if user_id == int(context["id"]):
+                    raise APIError("cannot_delete_own_account", 409)
+                remaining = db.execute(
+                    """SELECT COUNT(DISTINCT m.user_id) FROM memberships m JOIN users u ON u.id=m.user_id
+                       WHERE m.role='SUPER_ADMIN' AND u.is_active=1 AND m.user_id!=?""",
+                    (user_id,),
+                ).fetchone()[0]
+                if remaining == 0:
+                    raise APIError("last_platform_administrator", 409)
+                # Personal rows go; scientific rows stay. Assessments and their
+                # responses belong to the organisation and are not destroyed as
+                # a side effect of removing a person.
+                audit(db, context["id"], "user_deleted", "user", user_id, {
+                    "email": user["email"], "name": user["name"],
+                    "memberships": db.execute("SELECT COUNT(*) FROM memberships WHERE user_id=?", (user_id,)).fetchone()[0],
+                })
+                db.execute("UPDATE consultation_leads SET participant_user_id=NULL WHERE participant_user_id=?", (user_id,))
+                db.execute("UPDATE consultation_leads SET assigned_consultant_id=NULL WHERE assigned_consultant_id=?", (user_id,))
+                db.execute("UPDATE participants SET user_id=NULL WHERE user_id=?", (user_id,))
+                for table in ("sessions", "password_reset_tokens", "notifications", "user_settings", "memberships", "consents"):
+                    db.execute(f"DELETE FROM {table} WHERE user_id=?", (user_id,))
+                db.execute("DELETE FROM users WHERE id=?", (user_id,))
+                db.commit()
+                return self.send_json({"deleted": True, "user_id": user_id})
             if path == "/api/admin/configuration" and method == "PATCH":
                 allowed = {"MIN_BENCHMARK_SAMPLE", "GAP_THRESHOLD", "PRIORITY_WEIGHTS"}
                 key = str(data.get("key") or "").upper()

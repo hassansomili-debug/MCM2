@@ -57,6 +57,9 @@ const errorLabels = {
   consultation_lead_not_found: 'الطلب غير متاح لهذا الحساب.',
   assessment_id_required: 'تعذر ربط الطلب بالتقييم.',
   participant_session_invalid: 'انتهت جلسة المشارك؛ افتح النتيجة من جديد.',
+  cannot_delete_own_account: 'لا يمكنك حذف حسابك أنت.',
+  last_platform_administrator: 'لا يمكن حذف آخر مدير منصة نشط.',
+  user_not_found: 'المستخدم غير موجود.',
 };
 
 function e(value) {
@@ -64,12 +67,16 @@ function e(value) {
 }
 function number(value, digits = 0) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '--';
-  return new Intl.NumberFormat(document.documentElement.lang === 'en' ? 'en' : 'ar-SA', {maximumFractionDigits: digits, minimumFractionDigits: digits}).format(Number(value));
+  // Western digits throughout. The `ar-SA` locale renders Arabic-Indic
+  // numerals, which read poorly next to the Latin dimension codes and score
+  // scales used everywhere in this interface.
+  return new Intl.NumberFormat('en-US', {maximumFractionDigits: digits, minimumFractionDigits: digits}).format(Number(value));
 }
 function dateText(timestamp) {
   if (!timestamp) return '--';
   const date = typeof timestamp === 'number' ? new Date(timestamp * 1000) : new Date(timestamp);
-  return new Intl.DateTimeFormat(document.documentElement.lang === 'en' ? 'en' : 'ar-SA', {year:'numeric',month:'short',day:'numeric'}).format(date);
+  // Arabic month names with Western digits.
+  return new Intl.DateTimeFormat('ar-SA-u-nu-latn-ca-gregory', {year:'numeric',month:'short',day:'numeric'}).format(date);
 }
 function showToast(message, type = 'success') {
   toast.textContent = message;
@@ -193,12 +200,12 @@ async function router() {
     catch { applyShell(); if (!publicRoutes.has(route.parts[0])) return navigate('login'); }
   }
   if (researchRoutes.has(route.parts[0]) && !['RESEARCHER','SUPER_ADMIN'].includes(state.me?.user?.role)) return navigate('overview');
-  if (route.parts[0] === 'admin' && state.me?.user?.role !== 'SUPER_ADMIN') return navigate('overview');
+  if (['admin','consultations'].includes(route.parts[0]) && state.me?.user?.role !== 'SUPER_ADMIN') return navigate('overview');
   if (route.parts[0] === 'participants' && !canManageAssessments()) return navigate('overview');
-  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',privacy:'سياسة الخصوصية',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون',participant:'دخول المشارك','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة'};
+  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',privacy:'سياسة الخصوصية',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون',participant:'دخول المشارك','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة',consultations:'طلبات الاستشارة'};
   document.querySelector('#page-label').textContent = labels[route.parts[0]] || 'مقياس النضج الاتصالي التسويقي';
   if (route.parts[0] === 'dashboard') return navigate('results/latest');
-  const handlers = {landing:renderLanding,privacy:renderPrivacy,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,participant:renderParticipant,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin};
+  const handlers = {landing:renderLanding,privacy:renderPrivacy,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,participant:renderParticipant,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin,consultations:renderConsultations};
   const handler = handlers[route.parts[0]];
   if (!handler) { appView.innerHTML = emptyState('الصفحة غير موجودة', 'تحقق من الرابط أو عد إلى مساحة العمل.', '<a class="primary-button" href="#overview">العودة للرئيسية</a>'); return; }
   try { await handler(route); if (request === state.routeRequest) appView.focus({preventScroll:true}); }
@@ -269,22 +276,21 @@ async function renderLanding() {
         <h1>اعرف أين تقف منشأتك، وحوّل الاتصال إلى <i>قدرة مؤسسية تصنع الأثر.</i></h1>
         <p>شخّص نضج الاتصال التسويقي، واكتشف مدى تحوّله إلى كفاءة في التواصل الاجتماعي، ثم انتقل من النتيجة إلى أولويات وخارطة تحسين قابلة للتنفيذ.</p>
         <div class="hero-actions"><a class="primary-button large" href="#participant-start">ابدأ المقياس مباشرة</a><button class="secondary-button large" data-action="scroll-maturity" type="button">تعرّف على المراحل</button></div>
-        <div class="hero-proof"><span><b>٦٧</b> عبارة علمية</span><span><b>٢٠</b> بُعدًا وسياقًا</span><span><b>٥</b> مراحل نضج</span></div>
+        <div class="hero-proof"><span><b>67</b> عبارة علمية</span><span><b>20</b> بُعدًا وسياقًا</span><span><b>5</b> مراحل نضج</span></div>
       </div>
-      <div class="hero-model" role="group" aria-label="ملخص النموذج المفاهيمي">
-        <div class="model-column enablers"><small>السياق والممكنات</small><b>قيادة · كفاءات · تقنية · بيانات</b></div>
-        <span class="model-arrow" aria-hidden="true">←</span>
-        <div class="model-column mcm"><small>قدرة مؤسسية</small><b>MCM</b><strong>النضج الاتصالي التسويقي</strong></div>
-        <span class="model-arrow teal" aria-hidden="true">←</span>
-        <div class="model-column smce"><small>نتيجة اتصالية</small><b>SMCE</b><strong>كفاءة التواصل الاجتماعي</strong></div>
-        <p>أثر إيجابي مقترح · ${e(model.label_ar || 'نموذج تطبيقي قائم على الأدلة العلمية')}</p>
-      </div>
+      <aside class="hero-rationale" aria-label="أهمية النضج الاتصالي التسويقي">
+        <span class="eyebrow">لماذا يهمّ النضج الاتصالي التسويقي؟</span>
+        <p><strong>النضج الاتصالي ليس نشاطًا تسويقيًا، بل قدرة مؤسسية.</strong> هو أن تكون الرسالة محكومة بمالك واضح، والمعلومة من مصدر واحد معتمد، ورحلة العميل متسقة بين الإدارات، والقرار مبنيًا على أدلة تُراجع دوريًا.</p>
+        <p>حين ترسخ هذه القدرة تقلّ التناقضات أمام العميل، ويقصر زمن القرار، ويتراجع الهدر في الجهد والإنفاق التسويقي، لأن المبادرات تصبح مرتبطة بهدف ومؤشر بدل أن تتفرق باجتهادات فردية.</p>
+        <p class="hero-rationale-model">ويقترح النموذج أن ارتفاع هذه القدرة ينعكس على كفاءة الاتصال عبر وسائل التواصل الاجتماعي. المقياس يقيس الاثنين بصورة مستقلة ويعرض الفجوة بينهما، دون ادعاء علاقة سببية مثبتة.</p>
+        <small>${e(model.label_ar || 'نموذج تطبيقي قائم على الأدلة العلمية')}</small>
+      </aside>
     </section>
-    <section class="landing-confidence" aria-label="مزايا المقياس">
-      <article><b>دخول مباشر</b><span>يبدأ المشارك دون إنشاء حساب.</span></article>
-      <article><b>نتيجة تنفيذية</b><span>تصنيف ورسوم وأولويات وخطة 30/90/180.</span></article>
-      <article><b>بيانات بحثية</b><span>Excel وSPSS بترميزات جاهزة للتحليل.</span></article>
-      <article><b>فصل علمي</b><span>النضج والكفاءة والممكنات تُقرأ بصورة مستقلة.</span></article>
+    <section class="landing-confidence" aria-label="ما الذي يتغير عند تحسين النضج الاتصالي">
+      <article><b>اتساق الرسالة</b><span>رسالة واحدة عبر كل قناة ونقطة تماس، بدل إجابات تختلف باختلاف الموظف.</span></article>
+      <article><b>سرعة القرار</b><span>معلومة موثقة ومالك معروف، فيقصر زمن الاستجابة والتصعيد.</span></article>
+      <article><b>كفاءة الإنفاق</b><span>مبادرات مرتبطة بهدف ومؤشر ومراجعة، بدل جهد متفرق يصعب قياس أثره.</span></article>
+      <article><b>قدرة لا تعتمد على الأفراد</b><span>ممارسات راسخة في النظام تصمد مع النمو وتغيّر الفريق.</span></article>
     </section>
     <section class="landing-section value-section">
       <div class="section-intro"><span>أبعد من مؤشرات التفاعل</span><h2>ماذا سيكشف المقياس لمنشأتك؟</h2><p>قراءة إدارية تساعدك على تحديد موضع القدرة الاتصالية، وفهم الفجوات، وترتيب الاستثمار التالي.</p></div>
@@ -556,7 +562,7 @@ async function renderOverview() {
 async function renderAssessments() {
   loading(); const data = await api('/api/assessments');
   const createAction = canManageAssessments() ? '<button class="primary-button" data-action="create-assessment" type="button">تقييم جديد</button>' : '';
-  const rows = data.assessments.map(item => `<div class="data-table__row"><strong>#${item.id}<small>${e(item.assessment_type)}</small></strong><span>${badge(item.status, item.status === 'COMPLETED' ? '' : 'warning')}</span><span>${e(item.instrument_version)} · ${e(item.instrument_status)}</span><span>${dateText(item.created_at)}</span><span>${number(item.mcm_total,1)}</span><span class="button-row">${item.status === 'COMPLETED' ? `<a class="secondary-button" href="#results/${item.id}">النتائج</a>${canManageAssessments() ? `<button class="secondary-button" data-action="repeat-assessment" data-id="${item.id}">إعادة</button>` : ''}` : `<a class="primary-button" href="#assessment/${item.id}">فتح</a>`}</span></div>`);
+  const rows = data.assessments.map(item => `<div class="data-table__row"><strong>#${item.id}<small>${e(item.assessment_type)}</small></strong><span>${badge(item.status, item.status === 'COMPLETED' ? '' : 'warning')}</span><span>${e(item.instrument_version)} · ${e(item.instrument_status)}</span><span>${dateText(item.created_at)}</span><span>${number(item.mcm_total,1)}</span><span class="button-row">${item.status === 'COMPLETED' ? `<a class="secondary-button" href="#results/${item.id}">النتائج</a>${canManageAssessments() ? `<button class="secondary-button" data-action="repeat-assessment" data-id="${item.id}">إعادة</button>` : ''}` : `<a class="primary-button" href="#assessment/${item.id}">فتح</a>`}${hasRole('SUPER_ADMIN') ? `<button class="danger-button" data-action="delete-assessment" data-id="${item.id}">حذف</button>` : ''}</span></div>`);
   appView.innerHTML = `<div class="page">${pageHeading('مساحة العمل · التقييمات','التقييمات المؤسسية','الحفظ والاستكمال مرتبطان بالمشارك وصلاحيته داخل المؤسسة.', createAction)}${modelNotice()}<section class="panel">${rows.length ? table(['التقييم','الحالة','إصدار الأداة','تاريخ البدء','MCM','الإجراء'], rows, 6, 850) : emptyState('لا توجد تقييمات', 'لا توجد تقييمات معيّنة لهذا الحساب.', createAction)}</section></div>`;
 }
 
@@ -819,9 +825,32 @@ function renderExports() {
   appView.innerHTML = `<div class="page">${pageHeading('البحث · التصدير','Excel وSPSS جاهزان للتحليل','صف واحد لكل ملاحظة، أسماء متغيرات ASCII، قيم رقمية صحيحة، وترميزات وقاموس متغيرات منفصل—دون معرّفات شخصية مباشرة.')}<div class="card-grid"><section class="panel span-7"><form id="export-form" class="form-grid"><label class="field"><span>مصدر البيانات</span><select name="data_origin"><option value="REAL">واقعية بموافقة بحثية</option><option value="SYNTHETIC">اصطناعية فقط</option><option value="DEMO_TEST">Demo / Test</option><option value="ALL">كل المصادر - مراجعة خاصة</option></select></label><label class="field"><span>نوع التصدير</span><select name="format"><option value="XLSX">Excel متوافق مع SPSS</option><option value="SPSS">حزمة SPSS: XLSX + CSV + Syntax</option><option value="CSV">CSV UTF-8</option><option value="CODEBOOK">قاموس المتغيرات Excel</option><option value="INSTRUMENT">Instrument JSON</option></select></label><label class="checkbox-field full"><input type="checkbox" required><span>أفهم أن التصدير مسجّل في سجل التدقيق وأن البيانات الواقعية تتطلب موافقة بحثية.</span></label><button class="primary-button full">إنشاء وتنزيل الملف</button></form></section><aside class="card span-5 export-summary"><h2>تشمل المتغيرات</h2><ul><li>خصائص المنشأة: القطاع والحجم والعمر والمنطقة.</li><li>عدد المنصات ودور المجيب والممكنات الأربعة.</li><li>بنود ليكرت ودرجات الأبعاد MCM وSMCE.</li><li>المرحلة الخماسية وفارق الكفاءة عن النضج.</li></ul></aside></div><section class="card"><h2>محتويات مصنف Excel</h2><div class="pill-list">${['01_RESPONSES_WIDE','02_RESPONSES_LONG','03_MCM_SCORES','04_SMCE_SCORES','05_COMPANY_PROFILE','06_CODEBOOK','07_VARIABLE_LABELS','08_VALUE_LABELS','09_INSTRUMENT','10_METADATA'].map(item => `<span>${item}</span>`).join('')}</div></section></div>`;
 }
 
+async function renderConsultations() {
+  loading('جارٍ تحميل طلبات الاستشارة...');
+  const data = await api('/api/admin/consultations');
+  const cards = [
+    ['طلبات جديدة', data.counts.NEW || 0],
+    ['غير مسندة', data.unassigned || 0],
+    ['تم التواصل', data.counts.CONTACTED || 0],
+    ['جلسات مجدولة', data.counts.CONSULTATION_SCHEDULED || 0],
+  ].map(([label, value]) => `<article class="card metric-card span-3"><small>${e(label)}</small><strong>${number(value)}</strong></article>`).join('');
+  const rows = data.leads.map(lead => `<div class="data-table__row">
+    <strong>#${number(lead.id)}<small>${e(lead.full_name || '')}</small></strong>
+    <span>${e(lead.organization_display || lead.organization_name || '--')}</span>
+    <span>${lead.mcm_total === null || lead.mcm_total === undefined ? '--' : `${number(lead.mcm_total,1)}<small>${e(lead.maturity_label || '')}</small>`}</span>
+    <span>${lead.smce_total === null || lead.smce_total === undefined ? '--' : number(lead.smce_total,1)}</span>
+    <span>${(lead.consultation_topics || []).length ? e((lead.consultation_topics || []).join('، ')) : '--'}</span>
+    <span>${badge(lead.status, lead.status === 'DO_NOT_CONTACT' ? 'danger' : lead.status === 'NEW' ? 'warning' : '')}</span>
+    <span>${e(lead.consultant_name || 'غير مسند')}</span>
+    <span>${dateText(lead.created_at)}</span>
+    <span class="button-row"><a class="secondary-button" href="#results/${lead.assessment_id}">النتيجة</a></span>
+  </div>`);
+  appView.innerHTML = `<div class="page">${pageHeading('إدارة المنصة · الاستشارات','طلبات الاستشارة','بيانات التواصل تُعرض لمن يملك صلاحية معلنة فقط، ولا تدخل في أي تصدير بحثي.')}<div class="card-grid">${cards}</div><section class="panel">${rows.length ? table(['الطلب','المنشأة','MCM','SMCE','المحاور','الحالة','المستشار','التاريخ',''],rows,9,1180) : emptyState('لا توجد طلبات استشارة','تظهر الطلبات هنا فور إرسالها من صفحة النتائج.')}</section></div>`;
+}
+
 async function renderAdmin() {
   loading(); const [overview,users,organizations] = await Promise.all([api('/api/admin'),api('/api/admin/users'),api('/api/admin/organizations')]);
-  const userRows = users.users.map(item => `<div class="data-table__row"><strong>${e(item.name)}<small>${e(item.email)}</small></strong><span>${e(roleLabels[item.role] || item.role || '--')}</span><span>${e(item.organization_name || '--')}</span><span>${badge(item.is_active ? 'نشط':'معطل',item.is_active ? '':'danger')}</span><button class="secondary-button" data-action="toggle-user" data-id="${item.id}" data-active="${item.is_active ? '1':'0'}">${item.is_active ? 'تعطيل':'تفعيل'}</button></div>`);
+  const userRows = users.users.map(item => `<div class="data-table__row"><strong>${e(item.name)}<small>${e(item.email)}</small></strong><span>${e(roleLabels[item.role] || item.role || '--')}</span><span>${e(item.organization_name || '--')}</span><span>${badge(item.is_active ? 'نشط':'معطل',item.is_active ? '':'danger')}</span><span class="button-row"><button class="secondary-button" data-action="toggle-user" data-id="${item.id}" data-active="${item.is_active ? '1':'0'}">${item.is_active ? 'تعطيل':'تفعيل'}</button><button class="danger-button" data-action="delete-user" data-id="${item.id}" data-name="${e(item.name || '')}" data-email="${e(item.email || '')}">حذف</button></span></div>`);
   const options = organizations.organizations.map(item => `<option value="${item.id}">${e(item.name)}</option>`).join('');
   appView.innerHTML = `<div class="page">${pageHeading('إدارة المنصة','لوحة المدير العام','إدارة المستخدمين والمنظمات والإعدادات التشغيلية.')}<div class="card-grid"><article class="card metric-card span-3"><small>المؤسسات</small><strong>${number(overview.organizations)}</strong></article><article class="card metric-card span-3"><small>المستخدمون</small><strong>${number(overview.users)}</strong></article><article class="card metric-card span-3"><small>التقييمات</small><strong>${number(overview.assessments)}</strong></article><article class="card metric-card span-3"><small>الجلسات النشطة</small><strong>${number(overview.active_sessions)}</strong></article><section class="card span-12"><div class="card-title"><div><h2>إنشاء مستخدم</h2><p>تعيين مؤسسة ودور واضحين.</p></div></div><form id="admin-user-form" class="form-grid"><label class="field"><span>الاسم</span><input name="name" required></label><label class="field"><span>البريد</span><input name="email" type="email" required></label><label class="field"><span>كلمة المرور</span><input name="password" type="password" minlength="10" required></label><label class="field"><span>المؤسسة</span><select name="organization_id">${options}</select></label><label class="field full"><span>الدور</span><select name="role"><option value="COMPANY_RESPONDENT">مشارك شركة</option><option value="COMPANY_ADMIN">مدير شركة</option><option value="CONSULTANT">استشاري</option><option value="RESEARCHER">باحث</option><option value="SUPER_ADMIN">مدير المنصة</option></select></label><button class="primary-button full">إنشاء المستخدم</button></form></section></div><section class="panel">${table(['المستخدم','الدور','المؤسسة','الحالة',''],userRows,5,820)}</section><section class="card"><h2>إعدادات النظام</h2><div class="pill-list">${Object.entries(overview.configuration).map(([key,value]) => `<span>${e(key)}: ${e(typeof value === 'object' ? JSON.stringify(value) : value)}</span>`).join('')}</div></section></div>`;
 }
@@ -980,6 +1009,24 @@ document.addEventListener('click', async event => {
       button.disabled = true; const result = await api('/api/instrument-versions/import',{method:'POST',body:JSON.stringify(state.importPayload)}); showToast(`أُنشئت المسودة ${result.version}.`); navigate(`instrument/${result.id}`);
     }
     else if (action === 'toggle-user') { await api(`/api/admin/users/${button.dataset.id}`,{method:'PATCH',body:JSON.stringify({is_active:button.dataset.active !== '1'})}); router(); }
+    else if (action === 'delete-assessment') {
+      // Irreversible and destroys scientific data, so it is confirmed by name
+      // rather than by a single click.
+      openDialog(`<h2 id="dialog-title">حذف التقييم #${e(button.dataset.id)}</h2><p class="classification-boundary">سيُحذف التقييم وكل إجاباته ودرجاته وتشخيصاته وخارطته وتقاريره نهائيًا. لا يمكن التراجع، وسيتأثر أي تحليل بحثي يعتمد على هذه الحالة.</p><div class="button-row"><button class="danger-button" data-action="confirm-delete-assessment" data-id="${e(button.dataset.id)}" type="button">تأكيد الحذف النهائي</button><button class="secondary-button" data-action="close-dialog">إلغاء</button></div>`);
+    }
+    else if (action === 'confirm-delete-assessment') {
+      button.disabled = true;
+      const result = await api(`/api/assessments/${button.dataset.id}`,{method:'DELETE'});
+      closeDialog(); showToast(`حُذف التقييم #${result.assessment_id} وسُجّل في التدقيق.`); router();
+    }
+    else if (action === 'delete-user') {
+      openDialog(`<h2 id="dialog-title">حذف المستخدم</h2><p>${e(button.dataset.name || '')} · ${e(button.dataset.email || '')}</p><p class="classification-boundary">سيُحذف الحساب وعضوياته وجلساته وإشعاراته. لن تُحذف تقييمات المؤسسة ولا إجاباتها، لأنها بيانات المنشأة لا بيانات الشخص.</p><div class="button-row"><button class="danger-button" data-action="confirm-delete-user" data-id="${e(button.dataset.id)}" type="button">تأكيد الحذف</button><button class="secondary-button" data-action="close-dialog">إلغاء</button></div>`);
+    }
+    else if (action === 'confirm-delete-user') {
+      button.disabled = true;
+      await api(`/api/admin/users/${button.dataset.id}`,{method:'DELETE'});
+      closeDialog(); showToast('حُذف المستخدم وسُجّل في التدقيق.'); router();
+    }
     else if (action === 'logout') { await flushAnswers(); await api('/api/auth/logout',{method:'POST',body:'{}'}).catch(()=>{}); state.token='';state.me=null;localStorage.removeItem('mcm_token');closeDialog();navigate('login'); }
     else if (action === 'switch-org') { await api('/api/session/organization',{method:'POST',body:JSON.stringify({organization_id:Number(button.dataset.id)})}); state.me=await api('/api/me');applyShell();closeDialog();navigate('overview'); }
     else if (action === 'copy-invite') { await navigator.clipboard.writeText(document.querySelector('#invite-url').value); showToast('تم نسخ رابط الدعوة.'); }

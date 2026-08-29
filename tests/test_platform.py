@@ -452,6 +452,104 @@ class PlatformJourneyTests(unittest.TestCase):
         for required in ("البيانات التي نجمعها", "أساس المعالجة", "الاحتفاظ", "حقوقك"):
             self.assertIn(required, titles)
 
+    def test_interface_uses_western_digits(self):
+        client = (Path(__file__).parents[1] / "app.js").read_text(encoding="utf-8")
+        arabic_indic = [char for char in client if "٠" <= char <= "٩"]
+        self.assertEqual([], arabic_indic, "Arabic-Indic digits still reach the interface")
+        # Number and date formatting must not reintroduce them through a locale.
+        self.assertIn("Intl.NumberFormat('en-US'", client)
+        self.assertIn("nu-latn", client)
+
+    def test_only_the_platform_administrator_may_delete_an_assessment(self):
+        admin = self.login()
+        _, assessment_id = self._direct_participant_assessment("منشأة الحذف")
+
+        self.request("POST", "/api/auth/register", {
+            "name": "مسؤول شركة للحذف", "email": "delete-probe@example.test",
+            "password": "DeleteProbe2026", "organization_name": "منشأة فحص الحذف",
+            "service_consent": True,
+        }, expected=201)
+        company = self.login("delete-probe@example.test", "DeleteProbe2026")
+        self.assertEqual("permission_denied", self.request(
+            "DELETE", f"/api/assessments/{assessment_id}", token=company, expected=403)["error"])
+
+        from mcm import database
+        with database.transaction() as db:
+            before = db.execute("SELECT COUNT(*) FROM responses WHERE assessment_id=?", (assessment_id,)).fetchone()[0]
+        result = self.request("DELETE", f"/api/assessments/{assessment_id}", token=admin)
+        self.assertTrue(result["deleted"])
+
+        with database.transaction() as db:
+            self.assertIsNone(db.execute("SELECT id FROM assessments WHERE id=?", (assessment_id,)).fetchone())
+            # No orphan may survive in any table keyed by the assessment.
+            for table in ("responses", "assessment_context", "assessment_scores",
+                          "dimension_scores", "score_runs", "roadmap_items",
+                          "diagnostic_results", "consultation_leads"):
+                self.assertEqual(0, db.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE assessment_id=?", (assessment_id,)).fetchone()[0],
+                    f"{table} kept an orphan row")
+            record = db.execute(
+                "SELECT metadata_json FROM audit_logs WHERE action='assessment_deleted' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        self.assertIsNotNone(record, "an assessment deletion must be audited")
+        metadata = json.loads(record["metadata_json"])
+        # The audit entry records what was destroyed, since the rows are gone.
+        self.assertEqual(before, metadata["deleted_rows"]["responses"])
+        self.assertIn("organization_name", metadata)
+
+    def test_user_deletion_guards_the_platform_and_spares_organisation_data(self):
+        admin = self.login()
+        me = self.request("GET", "/api/me", token=admin)
+        self.assertEqual("cannot_delete_own_account", self.request(
+            "DELETE", f"/api/admin/users/{me['user']['id']}", token=admin, expected=409)["error"])
+
+        self.request("POST", "/api/auth/register", {
+            "name": "حساب للحذف", "email": "removable@example.test",
+            "password": "RemovableUser2026", "organization_name": "منشأة الحساب المحذوف",
+            "service_consent": True,
+        }, expected=201)
+        victim = self.login("removable@example.test", "RemovableUser2026")
+        created = self.request("POST", "/api/assessments", {"assessment_type": "FULL"}, victim, 201)
+
+        users = self.request("GET", "/api/admin/users", token=admin)["users"]
+        user_id = next(u["id"] for u in users if u["email"] == "removable@example.test")
+        self.request("DELETE", f"/api/admin/users/{user_id}", token=admin)
+
+        from mcm import database
+        with database.transaction() as db:
+            self.assertIsNone(db.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone())
+            self.assertEqual(0, db.execute("SELECT COUNT(*) FROM memberships WHERE user_id=?", (user_id,)).fetchone()[0])
+            self.assertEqual(0, db.execute("SELECT COUNT(*) FROM sessions WHERE user_id=?", (user_id,)).fetchone()[0])
+            # The organisation's assessment survives the person's removal.
+            self.assertIsNotNone(db.execute("SELECT id FROM assessments WHERE id=?", (created["id"],)).fetchone())
+        # The deleted account's session no longer authenticates.
+        self.request("GET", "/api/me", token=victim, expected=401)
+
+    def test_consultation_admin_screen_is_restricted_and_reads_scores_from_the_assessment(self):
+        token, assessment_id = self._direct_participant_assessment("منشأة لوحة الاستشارات")
+        self.request("POST", "/api/consultations", {
+            "assessment_id": assessment_id, "participant_token": token,
+            "full_name": "طالب الاستشارة", "email": "board@example.test",
+            "phone_number": "0566777888", "consent_to_contact": True,
+            "consultation_topics": ["MEASUREMENT_AND_LEARNING"],
+        }, expected=201)
+
+        admin = self.login()
+        board = self.request("GET", "/api/admin/consultations", token=admin)
+        lead = next(item for item in board["leads"] if item["email"] == "board@example.test")
+        self.assertEqual("NEW", lead["status"])
+        self.assertIsNone(lead["assigned_consultant_id"])
+        # Counts are aggregates over every lead in the database, so assert the
+        # relationship rather than a figure another test could move.
+        self.assertGreaterEqual(board["unassigned"], 1)
+        self.assertEqual(
+            sum(1 for item in board["leads"] if not item["assigned_consultant_id"]),
+            board["unassigned"],
+        )
+        # Scores come from the linked assessment, not from a field on the lead.
+        self.assertIn("mcm_total", lead)
+        self.assertEqual(["MEASUREMENT_AND_LEARNING"], lead["consultation_topics"])
+
     def test_results_navigation_states_and_dashboard_alias(self):
         client = (Path(__file__).parents[1] / "app.js").read_text(encoding="utf-8")
         shell = (Path(__file__).parents[1] / "index.html").read_text(encoding="utf-8")
