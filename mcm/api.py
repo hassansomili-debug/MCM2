@@ -464,10 +464,6 @@ class API(BaseHTTPRequestHandler):
             return self._public_assessment(data)
         if path.startswith("/api/auth/"):
             return self._auth(method, path, data)
-        if path.startswith("/api/invitations/") and path.endswith("/accept") and method == "POST":
-            return self._accept_invitation(path.split("/")[3], data)
-        if path.startswith("/api/invitations/") and method == "GET":
-            return self._invitation_details(path.split("/")[3])
         if path.startswith("/api/participant/session/"):
             return self._participant(method, path, data)
         context = self.context()
@@ -475,14 +471,32 @@ class API(BaseHTTPRequestHandler):
             return self._me(context)
         if path.startswith("/api/organizations") or path == "/api/session/organization" or path.startswith("/api/company/") or path == "/api/consents":
             return self._organization(method, path, data, context)
-        if path == "/api/invitations":
-            return self._invitations(method, data, context)
         if path.startswith("/api/notifications") or path == "/api/settings":
             return self._preferences(method, path, data, context)
         if path.startswith("/api/instruments") or path.startswith("/api/instrument-versions") or path.startswith("/api/research/instruments") or path.startswith("/api/research/items") or path.startswith("/api/research/codebook"):
             return self._instruments(method, path, query, data, context)
         if path.startswith("/api/assessments"):
             return self._assessments(method, path, data, context)
+        if path == "/api/participants" and method == "GET":
+            # Replaces the invitation list. Entry is direct, so this reports who
+            # actually answered rather than who was invited.
+            self.require_roles(context, PRIVILEGED_ASSESSMENT_ROLES)
+            db = connect()
+            try:
+                rows = db.execute(
+                    """SELECT p.id,p.research_id,p.full_name,p.job_title,p.department,p.created_at,
+                              ap.assessment_id,ap.assessment_role,ap.status AS participation_status,
+                              a.status AS assessment_status,a.completed_at
+                       FROM participants p
+                       LEFT JOIN assessment_participants ap ON ap.participant_id=p.id
+                       LEFT JOIN assessments a ON a.id=ap.assessment_id
+                       WHERE p.organization_id=?
+                       ORDER BY p.created_at DESC,p.id DESC""",
+                    (context["organization_id"],),
+                ).fetchall()
+                return self.send_json({"participants": [dict(row) for row in rows]})
+            finally:
+                db.close()
         if path == "/api/dashboard":
             return self._dashboard(context)
         if path.startswith("/api/results/") or path.startswith("/api/diagnostics/") or path.startswith("/api/gaps/") or path.startswith("/api/priorities/") or path.startswith("/api/roadmap/") or path == "/api/history" or path.startswith("/api/benchmark/"):
@@ -1425,93 +1439,6 @@ class API(BaseHTTPRequestHandler):
                 db.commit()
                 return self.send_json({"consent_type": consent_type, "accepted": bool(accepted), "version": version})
             raise APIError("route_not_found", 404)
-        finally:
-            db.close()
-
-    def _invitations(self, method: str, data: dict, context):
-        db = connect()
-        try:
-            if method == "GET":
-                self.require_roles(context, {"COMPANY_ADMIN", "CONSULTANT", "SUPER_ADMIN"})
-                rows = db.execute("SELECT id,assessment_id,email,full_name,job_title,department,role,status,expires_at,accepted_at FROM invitations WHERE organization_id=? ORDER BY id DESC", (context["organization_id"],)).fetchall()
-                return self.send_json({"invitations": [dict(row) for row in rows]})
-            if method == "POST":
-                self.require_roles(context, {"COMPANY_ADMIN", "CONSULTANT", "SUPER_ADMIN"})
-                email = _slug_email(data.get("email"))
-                if not _valid_email(email):
-                    raise APIError("valid_email_required", 422)
-                assessment_id = int(data.get("assessment_id") or 0)
-                assessment = db.execute("SELECT * FROM assessments WHERE id=? AND organization_id=? AND status IN ('DRAFT','IN_PROGRESS')", (assessment_id, context["organization_id"])).fetchone()
-                if not assessment:
-                    raise APIError("active_assessment_required", 422)
-                raw = secrets.token_urlsafe(28)
-                digest = token_hash(raw)
-                expires = now() + config.INVITATION_TTL
-                invitation_id = db.execute(
-                    """INSERT INTO invitations(organization_id,assessment_id,email,full_name,job_title,department,role,token,status,expires_at,created_by)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-                    (context["organization_id"], assessment_id, email, str(data.get("full_name") or "").strip() or None, data.get("job_title"), data.get("department"), str(data.get("assessment_role") or "RESPONDENT").upper(), digest, "PENDING", expires, context["id"]),
-                ).lastrowid
-                audit(db, context["id"], "invite", "invitation", invitation_id, {"assessment_id": assessment_id})
-                db.commit()
-                return self.send_json({"id": invitation_id, "email": email, "status": "PENDING", "expires_at": expires, "invitation_url": f"/#participant?token={raw}"}, 201)
-            raise APIError("method_not_allowed", 405)
-        finally:
-            db.close()
-
-    def _find_invitation(self, db, raw: str, *, lock: bool = False):
-        sql = "SELECT * FROM invitations WHERE token IN (?,?) ORDER BY id DESC LIMIT 1"
-        if lock:
-            return select_for_update(db, sql, (token_hash(raw), raw))
-        return db.execute(sql, (token_hash(raw), raw)).fetchone()
-
-    def _invitation_details(self, raw: str):
-        db = connect()
-        try:
-            invitation = self._find_invitation(db, raw)
-            if not invitation or invitation["expires_at"] <= now():
-                raise APIError("invitation_invalid_or_expired", 404)
-            organization = db.execute("SELECT name FROM organizations WHERE id=?", (invitation["organization_id"],)).fetchone()
-            return self.send_json({"email": invitation["email"], "full_name": invitation["full_name"], "assessment_id": invitation["assessment_id"], "role": invitation["role"], "status": invitation["status"], "organization_name": organization["name"] if organization else None, "expires_at": invitation["expires_at"]})
-        finally:
-            db.close()
-
-    def _accept_invitation(self, raw: str, data: dict):
-        self._rate_limit("invitation_accept", 20, 3600)
-        db = connect()
-        try:
-            db.execute("BEGIN IMMEDIATE")
-            invitation = self._find_invitation(db, raw, lock=True)
-            if not invitation or invitation["expires_at"] <= now() or invitation["status"] != "PENDING":
-                raise APIError("invitation_invalid_or_expired", 404)
-            assessment = db.execute("SELECT * FROM assessments WHERE id=? AND status IN ('DRAFT','IN_PROGRESS')", (invitation["assessment_id"],)).fetchone()
-            if not assessment:
-                raise APIError("assessment_not_available", 409)
-            accepted = bool(data.get("service_consent"))
-            if not accepted:
-                raise APIError("service_consent_required", 422)
-            select_for_update(db, "SELECT id FROM organizations WHERE id=?", (invitation["organization_id"],))
-            participant = db.execute("SELECT * FROM participants WHERE organization_id=? AND lower(email)=? ORDER BY id LIMIT 1", (invitation["organization_id"], invitation["email"].lower())).fetchone()
-            if participant:
-                participant_id = participant["id"]
-            else:
-                participant_id = db.execute(
-                    "INSERT INTO participants(organization_id,full_name,email,job_title,department,created_at) VALUES (?,?,?,?,?,?)",
-                    (invitation["organization_id"], invitation["full_name"] or data.get("full_name") or "مشارك", invitation["email"], invitation["job_title"], invitation["department"], now()),
-                ).lastrowid
-                db.execute("UPDATE participants SET research_id=? WHERE id=?", (f"P{participant_id:06d}", participant_id))
-            db.execute("INSERT INTO assessment_participants(assessment_id,participant_id,assessment_role,status) VALUES (?,?,?,?) ON CONFLICT(assessment_id,participant_id) DO UPDATE SET assessment_role=excluded.assessment_role,status='ACCEPTED'", (assessment["id"], participant_id, invitation["role"], "ACCEPTED"))
-            db.execute("DELETE FROM consents WHERE participant_id=? AND user_id IS NULL AND consent_type IN ('SERVICE_DIAGNOSTIC','RESEARCH_USE') AND consent_version='1.0'", (participant_id,))
-            db.execute("INSERT INTO consents(participant_id,consent_type,consent_version,accepted,accepted_at) VALUES (?,?,?,?,?)", (participant_id, "SERVICE_DIAGNOSTIC", "1.0", 1, now()))
-            if data.get("research_consent") is not None:
-                db.execute("INSERT INTO consents(participant_id,consent_type,consent_version,accepted,accepted_at) VALUES (?,?,?,?,?)", (participant_id, "RESEARCH_USE", "1.0", int(bool(data.get("research_consent"))), now()))
-            session_raw = secrets.token_urlsafe(36)
-            db.execute("INSERT INTO participant_sessions(token,participant_id,name,email,assessment_id,expires_at) VALUES (?,?,?,?,?,?)", (token_hash(session_raw), participant_id, invitation["full_name"] or data.get("full_name") or "مشارك", invitation["email"], assessment["id"], invitation["expires_at"]))
-            db.execute("UPDATE invitations SET status='ACCEPTED',accepted_at=? WHERE id=?", (now(), invitation["id"]))
-            db.execute("UPDATE assessments SET status='IN_PROGRESS',updated_at=? WHERE id=? AND status='DRAFT'", (now(), assessment["id"]))
-            audit(db, None, "accept", "invitation", invitation["id"], {"participant_id": participant_id})
-            db.commit()
-            return self.send_json({"token": session_raw, "assessment_id": assessment["id"], "participant_id": participant_id})
         finally:
             db.close()
 

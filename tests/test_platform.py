@@ -1015,42 +1015,58 @@ class PlatformJourneyTests(unittest.TestCase):
         self.assertFalse(preview["valid"])
         self.assertGreater(len(preview["errors"]), 0)
 
-    def test_participant_submission_is_scoped_and_one_time(self):
-        owner = self.login()
-        created = self.request("POST", "/api/assessments", {"assessment_type": "FULL"}, owner, 201)
-        assessment_id = created["id"]
-        invitation = self.request("POST", "/api/invitations", {
-            "assessment_id": assessment_id, "email": "participant@example.test", "full_name": "مشارك مستقل",
-            "assessment_role": "RESPONDENT",
-        }, owner, 201)
-        raw_token = urllib.parse.parse_qs(urllib.parse.urlsplit(invitation["invitation_url"]).fragment.split("?", 1)[1])["token"][0]
-        accepted = self.request("POST", f"/api/invitations/{raw_token}/accept", {
-            "service_consent": True, "research_consent": False, "full_name": "مشارك مستقل",
-        })
-        participant_token = accepted["token"]
+    def test_participant_session_is_scoped_and_submission_is_one_time(self):
+        """The invariants that used to be reached through an invitation.
 
-        owner_detail = self.request("GET", f"/api/assessments/{assessment_id}", token=owner)
-        owner_answers = [{"item_id": item["id"], "value": 3} for item in owner_detail["items"]]
-        self.request("POST", f"/api/assessments/{assessment_id}/answers", {"answers": owner_answers}, owner)
-        owner_submit = self.request("POST", f"/api/assessments/{assessment_id}/submit", {}, owner)
-        self.assertFalse(owner_submit["assessment_complete"])
-        self.assertEqual(1, owner_submit["pending_participants"])
+        Entry is direct now, so the participant session comes from the public
+        start endpoint; the guarantees it must uphold are unchanged.
+        """
+        participant_token, assessment_id = self._direct_participant_assessment("منشأة جلسة المشارك")
+        other_token, other_assessment = self._direct_participant_assessment("منشأة أخرى للجلسة")
 
         participant = self.request("GET", f"/api/participant/session/{participant_token}")
-        participant_answers = [{"item_id": item["id"], "value": 4} for item in participant["items"]]
-        self.request("POST", f"/api/participant/session/{participant_token}/answers", {"answers": participant_answers})
-        participant_submit = self.request("POST", f"/api/participant/session/{participant_token}/submit", {})
-        self.assertTrue(participant_submit["assessment_complete"])
+        self.assertEqual(assessment_id, participant["assessment"]["id"])
+        answers = [{"item_id": item["id"], "value": 4} for item in participant["items"]]
+        self.request("POST", f"/api/participant/session/{participant_token}/answers", {"answers": answers})
+        submitted = self.request("POST", f"/api/participant/session/{participant_token}/submit", {})
+        self.assertTrue(submitted["assessment_complete"])
+
+        # Submission is one-time and the session becomes read-only.
         locked = self.request("POST", f"/api/participant/session/{participant_token}/submit", {}, expected=409)
         self.assertIn(locked["error"], {"assessment_locked", "participant_submission_locked"})
         late_save = self.request(
-            "POST",
-            f"/api/participant/session/{participant_token}/answers",
-            {"answers": participant_answers[:1]},
-            expected=409,
+            "POST", f"/api/participant/session/{participant_token}/answers",
+            {"answers": answers[:1]}, expected=409,
         )
         self.assertIn(late_save["error"], {"assessment_locked", "participant_submission_locked"})
-        self.request("GET", f"/api/results/{assessment_id}", token=owner)
+
+        # A session reaches its own assessment and no other.
+        self.assertEqual(other_assessment, self.request(
+            "GET", f"/api/participant/session/{other_token}")["assessment"]["id"])
+        self.assertEqual("participant_session_invalid", self.request(
+            "GET", "/api/participant/session/not-a-real-token", expected=401)["error"])
+
+    def test_the_invitation_system_is_gone(self):
+        owner = self.login()
+        # Every invitation endpoint is removed, not merely hidden in the client.
+        for method, path, body in (
+            ("GET", "/api/invitations", None),
+            ("POST", "/api/invitations", {"assessment_id": 1, "email": "x@example.test"}),
+            ("GET", "/api/invitations/sometoken", None),
+            ("POST", "/api/invitations/sometoken/accept", {"service_consent": True}),
+        ):
+            response = self.request(method, path, body, token=owner, expected=404)
+            self.assertEqual("route_not_found", response["error"])
+
+        client = (Path(__file__).parents[1] / "app.js").read_text(encoding="utf-8")
+        shell = (Path(__file__).parents[1] / "index.html").read_text(encoding="utf-8")
+        for banned in ("رمز الدعوة", "لدي دعوة", "invitation-token-form", "accept-invitation-form", "invite-form"):
+            self.assertNotIn(banned, client)
+            self.assertNotIn(banned, shell)
+        # The participants screen now reports who actually answered.
+        self.assertIn("/api/participants", client)
+        participants = self.request("GET", "/api/participants", token=owner)
+        self.assertIn("participants", participants)
 
     def test_real_research_data_requires_controller_and_contributor_consent(self):
         researcher = self.login()

@@ -33,7 +33,7 @@ SQLite and PostgreSQL preserve the same 46-table application surface. The Supaba
 | --- | --- |
 | `assessments` | Tenant, version, type, origin, status, timestamps and reassessment parent. |
 | `assessment_context` | Per-case SME demographics and four enabling conditions, retained outside the MCM score denominator. |
-| `participants`, `assessment_participants`, `participant_sessions`, `invitations` | Multi-respondent identity boundary and invitation access. |
+| `participants`, `assessment_participants`, `participant_sessions` | Participant identity boundary and scoped session access. `invitations` is retained for historical rows only; nothing writes to it. |
 | `responses` | Raw numeric/text value or missing type, unique per assessment/participant/item. |
 | `score_runs` | Append-only run number, scoring/configuration snapshot and input/output hashes. |
 | `response_item_scores`, `score_run_dimensions`, `score_run_totals` | Complete trace of the current and previous calculations. |

@@ -24,7 +24,7 @@ SQLite database on a persistent path
 
 1. Identity and organization: users, sessions, memberships, roles, consents, company profile and settings.
 2. Scientific instrument: instruments, immutable versions, dimensions, scales, items, thresholds, rules and recommendations.
-3. Assessment: participants, invitations, autosaved responses, review, submission and reassessment lineage.
+3. Assessment: participants, autosaved responses, review, submission and reassessment lineage. Entry is direct; there is no invitation flow.
 4. Scoring: item normalization, reverse coding, dimension aggregation, separate MCM/SMCE totals and append-only score runs.
 5. Improvement: diagnostics, gaps, priorities, recommendations and 30/90/180-day roadmap.
 6. Research: anonymized cases, consent/origin filters, data quality, descriptive statistics, benchmarks and exports.

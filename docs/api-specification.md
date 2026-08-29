@@ -23,9 +23,7 @@ All JSON endpoints are same-origin under `/api`. Authenticated calls send `Autho
 | GET/PATCH | `/api/company/profile` | Read profile / update as company admin. |
 | GET/POST/PATCH | `/api/company/team` | List or manage memberships as company admin. |
 | GET/PATCH | `/api/consents` | Read/update versioned service and research consent. |
-| GET/POST | `/api/invitations` | List/create invitations for authorized company roles. |
-| GET | `/api/invitations/{token}` | Public invitation summary. |
-| POST | `/api/invitations/{token}/accept` | Accept an unexpired invitation and create a participant session. |
+| GET | `/api/participants` | Participants who actually started an assessment in the organization. |
 | GET/POST | `/api/participant/session/{token}` | Load participant questionnaire. |
 | POST | `/api/participant/session/{token}/answers` | Autosave participant answers. |
 | POST | `/api/participant/session/{token}/submit` | Validate required items, lock and score. |

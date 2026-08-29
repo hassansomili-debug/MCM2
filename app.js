@@ -38,7 +38,7 @@ const errorLabels = {
   authentication_required: 'يلزم تسجيل الدخول.', permission_denied: 'ليست لديك صلاحية لهذا الإجراء.',
   required_answers_missing: 'لا يزال هناك بنود مطلوبة بلا إجابة.', assessment_locked: 'هذا التقييم مكتمل ومقفل.',
   password_policy_failed: 'استخدم 10 أحرف على الأقل تتضمن حرفًا كبيرًا وصغيرًا ورقمًا.',
-  email_already_exists: 'البريد مستخدم بالفعل.', invitation_invalid_or_expired: 'رابط الدعوة غير صالح أو منتهي.',
+  email_already_exists: 'البريد مستخدم بالفعل.',
   instrument_validation_failed: 'ملف الأداة لم يجتز التحقق.', rate_limit_exceeded: 'محاولات كثيرة. حاول لاحقًا.',
   internal_error: 'حدث خطأ غير متوقع. حاول مرة أخرى.', route_not_found: 'المسار المطلوب غير موجود.',
   registration_disabled: 'إنشاء الحسابات معطل في بيئة العرض المؤقتة.',
@@ -184,7 +184,7 @@ function applyShell() {
   count.textContent = state.me.unread_notifications || 0; count.hidden = !state.me.unread_notifications;
 }
 
-const publicRoutes = new Set(['landing', 'participant-start', 'login', 'participant', 'participant-assessment', 'forgot', 'reset', 'privacy']);
+const publicRoutes = new Set(['landing', 'participant-start', 'login', 'participant-assessment', 'forgot', 'reset', 'privacy']);
 const researchRoutes = new Set(['research', 'dataset', 'instruments', 'instrument', 'data-quality', 'statistics', 'exports']);
 async function router() {
   const request = ++state.routeRequest;
@@ -209,10 +209,10 @@ async function router() {
   if (route.parts[0] === 'consultations' && !['SUPER_ADMIN','CONSULTANT'].includes(state.me?.user?.role)) return navigate('overview');
   if (route.parts[0] === 'analytics' && !['SUPER_ADMIN','RESEARCHER'].includes(state.me?.user?.role)) return navigate('overview');
   if (route.parts[0] === 'participants' && !canManageAssessments()) return navigate('overview');
-  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',privacy:'سياسة الخصوصية',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون',participant:'دخول المشارك','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة',consultations:'طلبات الاستشارة',analytics:'مركز تحليل البيانات'};
+  const labels = {landing:'الرئيسية','participant-start':'ابدأ المقياس',overview:'نظرة عامة',assessments:'التقييمات',assessment:'التقييم',results:'النتائج',dashboard:'النتائج',privacy:'سياسة الخصوصية',dimension:'تفاصيل البعد',diagnosis:'التشخيص',gaps:'تحليل الفجوات',priorities:'الأولويات',roadmap:'خارطة التحسين',history:'مسار النضج',benchmark:'المقارنة المرجعية',reports:'التقارير',participants:'المشاركون','participant-assessment':'تقييم المشارك',notifications:'الإشعارات',settings:'الإعدادات',methodology:'المنهجية',research:'لوحة الباحث',dataset:'مجموعة البيانات',instruments:'إصدارات الأداة',instrument:'تفاصيل الأداة','data-quality':'جودة البيانات',statistics:'الإحصاءات',exports:'التصدير',admin:'إدارة المنصة',consultations:'طلبات الاستشارة',analytics:'مركز تحليل البيانات'};
   document.querySelector('#page-label').textContent = labels[route.parts[0]] || 'مقياس النضج الاتصالي التسويقي';
   if (route.parts[0] === 'dashboard') return navigate('results/latest');
-  const handlers = {landing:renderLanding,privacy:renderPrivacy,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,participant:renderParticipant,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin,consultations:renderConsultations,analytics:renderAnalytics};
+  const handlers = {landing:renderLanding,privacy:renderPrivacy,'participant-start':renderParticipantStart,login:renderAuth,forgot:renderForgot,reset:renderReset,overview:renderOverview,assessments:renderAssessments,assessment:renderAssessment,results:renderResults,dimension:renderDimension,diagnosis:renderDiagnosis,gaps:renderGaps,priorities:renderPriorities,roadmap:renderRoadmap,history:renderHistory,benchmark:renderBenchmark,reports:renderReports,participants:renderParticipants,'participant-assessment':renderParticipantAssessment,notifications:renderNotifications,settings:renderSettings,methodology:renderMethodology,research:renderResearch,dataset:renderDataset,instruments:renderInstruments,instrument:renderInstrument,'data-quality':renderDataQuality,statistics:renderStatistics,exports:renderExports,admin:renderAdmin,consultations:renderConsultations,analytics:renderAnalytics};
   const handler = handlers[route.parts[0]];
   if (!handler) { appView.innerHTML = emptyState('الصفحة غير موجودة', 'تحقق من الرابط أو عد إلى مساحة العمل.', '<a class="primary-button" href="#overview">العودة للرئيسية</a>'); return; }
   try { await handler(route); if (request === state.routeRequest) appView.focus({preventScroll:true}); }
@@ -220,7 +220,7 @@ async function router() {
 }
 
 function publicNav() {
-  return `<nav class="public-nav" aria-label="التنقل الرئيسي"><a class="public-brand" href="#landing"><span>ن</span><b>مقياس النضج الاتصالي التسويقي</b></a><div><a href="#landing">الرئيسية</a><button class="landing-nav-link" data-action="scroll-maturity" type="button">مراحل النضج</button><a href="#participant">لدي دعوة</a><a class="secondary-button" href="#login">تسجيل الدخول</a><a class="primary-button" href="#participant-start">ابدأ المقياس</a></div></nav>`;
+  return `<nav class="public-nav" aria-label="التنقل الرئيسي"><a class="public-brand" href="#landing"><span>ن</span><b>مقياس النضج الاتصالي التسويقي</b></a><div><a href="#landing">الرئيسية</a><button class="landing-nav-link" data-action="scroll-maturity" type="button">مراحل النضج</button><a href="#privacy">الخصوصية</a><a class="secondary-button" href="#login">تسجيل الدخول</a><a class="primary-button" href="#participant-start">ابدأ المقياس</a></div></nav>`;
 }
 
 function scrollElementIntoView(element, block = 'start') {
@@ -732,20 +732,13 @@ async function renderReports() {
 }
 
 async function renderParticipants() {
-  loading(); const [invitations, assessments] = await Promise.all([api('/api/invitations'), api('/api/assessments')]);
+  loading(); const [participants, assessments] = await Promise.all([api('/api/participants'), api('/api/assessments')]);
   const active = assessments.assessments.filter(item => ['DRAFT','IN_PROGRESS'].includes(item.status));
-  const form = active.length ? `<form id="invite-form" class="form-grid"><label class="field"><span>التقييم</span><select name="assessment_id">${active.map(item => `<option value="${item.id}">#${item.id} · ${e(statusLabels[item.status])}</option>`).join('')}</select></label><label class="field"><span>البريد</span><input name="email" type="email" required></label><label class="field"><span>الاسم</span><input name="full_name"></label><label class="field"><span>المسمى الوظيفي</span><input name="job_title"></label><label class="field"><span>القسم</span><select name="department"><option>Executive</option><option>Marketing</option><option>Sales</option><option>Operations</option><option>Customer Experience</option><option>Product</option><option>Other</option></select></label><label class="field"><span>دور التقييم</span><select name="assessment_role"><option value="RESPONDENT">مشارك</option><option value="OBSERVER">مراقب</option></select></label><button class="primary-button full">إنشاء رابط دعوة آمن</button></form>` : emptyState('يلزم تقييم نشط','أنشئ تقييمًا أو استكمل مسودة لإضافة المشاركين.','<a class="primary-button" href="#assessments">التقييمات</a>');
-  const rows = invitations.invitations.map(item => `<div class="data-table__row"><strong>${e(item.full_name || item.email)}<small>${e(item.email)}</small></strong><span>#${item.assessment_id || '--'}</span><span>${e(item.department || '--')}</span><span>${e(item.role)}</span><span>${badge(item.status,item.status === 'PENDING' ? 'warning':'')}</span><span>${dateText(item.expires_at)}</span></div>`);
-  appView.innerHTML = `<div class="page">${pageHeading('مساحة العمل · الفريق','المشاركون والدعوات','تُربط كل دعوة بتقييم وتنتهي صلاحيتها تلقائيًا.')}<section class="panel"><div class="card-title"><div><h2>دعوة مشارك</h2><p>رابط آمن مع موافقة خدمة مستقلة عن موافقة البحث.</p></div></div>${form}</section><section class="panel">${rows.length ? table(['المشارك','التقييم','القسم','الدور','الحالة','الانتهاء'],rows,6,850) : emptyState('لا توجد دعوات','أنشئ رابط دعوة للتقييم النشط.')}</section></div>`;
+  const rows = participants.participants.map(item => `<div class="data-table__row"><strong>${e(item.full_name || 'مشارك مباشر')}<small dir="ltr">${e(item.research_id || '')}</small></strong><span>${item.assessment_id ? `#${number(item.assessment_id)}` : '--'}</span><span>${e(item.job_title || '--')}</span><span>${e(item.department || '--')}</span><span>${badge(item.assessment_status || item.participation_status, item.assessment_status === 'COMPLETED' ? '' : 'warning')}</span><span>${dateText(item.completed_at || item.created_at)}</span><span class="button-row">${item.assessment_status === 'COMPLETED' && item.assessment_id ? `<a class="secondary-button" href="#results/${item.assessment_id}">النتيجة</a>` : ''}</span></div>`);
+  const startAction = `<a class="primary-button" href="#participant-start">ابدأ تقييمًا مباشرًا</a>`;
+  appView.innerHTML = `<div class="page">${pageHeading('مساحة العمل · المشاركون','المشاركون','الدخول مباشر بلا دعوات وبلا حسابات؛ تظهر هنا الحالات التي بدأت فعلًا وحالة كل منها.', startAction)}<section class="panel"><div class="card-title"><div><h2>تقييمات نشطة</h2><p>${active.length ? `${number(active.length)} تقييم قيد التنفيذ في هذه المؤسسة.` : 'لا توجد تقييمات قيد التنفيذ حاليًا.'}</p></div></div>${rows.length ? table(['المشارك','التقييم','المسمى','القسم','الحالة','التاريخ',''],rows,7,940) : emptyState('لا يوجد مشاركون بعد','يبدأ المشارك المقياس مباشرة من الصفحة العامة دون دعوة أو حساب.',startAction)}</section></div>`;
 }
 
-async function renderParticipant(route) {
-  state.me = state.token ? state.me : null; applyShell();
-  const token = route.query.get('token') || '';
-  let invitation = null;
-  if (token) invitation = await api(`/api/invitations/${encodeURIComponent(token)}`);
-  appView.innerHTML = `<section class="auth-layout"><div class="auth-brand"><div class="auth-logo"><span>ن</span>مقياس النضج الاتصالي التسويقي</div><div class="auth-copy"><div class="eyebrow">SECURE PARTICIPANT PORTAL</div><h1>شارك خبرتك.<br><i>بخصوصية واضحة.</i></h1><p>تُحفظ إجابتك في التقييم المحدد، ولا تظهر بياناتك الشخصية في مجموعة البحث الافتراضية.</p></div><small>Research consent is optional and separate</small></div><div class="auth-panel"><div class="auth-box"><h2>${invitation ? `دعوة من ${e(invitation.organization_name)}` : 'لديك دعوة؟'}</h2>${invitation ? `<p>التقييم #${invitation.assessment_id} · ${e(invitation.email)}</p><form id="accept-invitation-form" class="form-grid"><input type="hidden" name="token" value="${e(token)}"><label class="field full"><span>الاسم الكامل</span><input name="full_name" value="${e(invitation.full_name || '')}" required></label><label class="checkbox-field full"><input name="service_consent" type="checkbox" required><span>أوافق على معالجة إجاباتي لتقديم التشخيص للمؤسسة.</span></label><label class="checkbox-field full"><input name="research_consent" type="checkbox"><span>أوافق اختياريًا على استخدام بيانات مجهولة لأغراض البحث.</span></label><button class="primary-button full">قبول وبدء التقييم</button></form>` : `<p>ألصق رمز الدعوة الذي استلمته من مسؤول التقييم، أو ابدأ المقياس مباشرة دون حساب.</p><form id="invitation-token-form" class="form-grid"><label class="field full"><span>رمز الدعوة</span><input name="token" required autocomplete="off"></label><button class="primary-button full">التحقق من الدعوة</button></form><a class="primary-button full" href="#participant-start">بدء المقياس مباشرة</a>`}${state.token ? '<p><a href="#overview">العودة لمساحة العمل</a></p>' : '<p><a href="#landing">العودة للرئيسية</a> · <a href="#login">تسجيل الدخول</a></p>'}</div></div></section>`;
-}
 
 async function renderParticipantAssessment(route) {
   state.me = state.token ? state.me : null; applyShell();
@@ -1216,7 +1209,6 @@ document.addEventListener('click', async event => {
     }
     else if (action === 'logout') { await flushAnswers(); await api('/api/auth/logout',{method:'POST',body:'{}'}).catch(()=>{}); state.token='';state.me=null;localStorage.removeItem('mcm_token');closeDialog();navigate('login'); }
     else if (action === 'switch-org') { await api('/api/session/organization',{method:'POST',body:JSON.stringify({organization_id:Number(button.dataset.id)})}); state.me=await api('/api/me');applyShell();closeDialog();navigate('overview'); }
-    else if (action === 'copy-invite') { await navigator.clipboard.writeText(document.querySelector('#invite-url').value); showToast('تم نسخ رابط الدعوة.'); }
     else if (action === 'open-settings') { closeDialog(); navigate('settings'); }
   } catch (error) { button.disabled = false; showToast(apiMessage(error),'error'); }
 });
@@ -1309,15 +1301,6 @@ document.addEventListener('submit', async event => {
       closeDialog(); showToast('سُجّلت الحالة العلمية في سجل التدقيق.'); router();
     }
     else if (form.id === 'report-form') { const report=await api('/api/reports',{method:'POST',body:JSON.stringify({assessment_id:Number(data.assessment_id),report_type:data.report_type})});await downloadApi(report.download_url);router(); }
-    else if (form.id === 'invite-form') {
-      const result=await api('/api/invitations',{method:'POST',body:JSON.stringify({...data,assessment_id:Number(data.assessment_id)})});
-      openDialog(`<h2 id="dialog-title">تم إنشاء الدعوة</h2><p>انسخ الرابط وأرسله للمشارك عبر قناة آمنة.</p><label class="field"><span>رابط الدعوة</span><input id="invite-url" dir="ltr" value="${e(new URL(result.invitation_url,location.href).href)}" readonly></label><button class="primary-button" type="button" data-action="copy-invite">نسخ الرابط</button>`);
-    }
-    else if (form.id === 'invitation-token-form') navigate(`participant?token=${encodeURIComponent(data.token.trim())}`);
-    else if (form.id === 'accept-invitation-form') {
-      const result=await api(`/api/invitations/${encodeURIComponent(data.token)}/accept`,{method:'POST',body:JSON.stringify({full_name:data.full_name,service_consent:true,research_consent:new FormData(form).has('research_consent')})});
-      sessionStorage.setItem('mcm_participant_token',result.token);navigate(`participant-assessment/${result.assessment_id}`);
-    }
     else if (form.id === 'direct-assessment-form') {
       const fd = new FormData(form); const submit = form.querySelector('button[type="submit"]');
       submit.disabled = true; submit.textContent = 'جارٍ تجهيز المقياس...';

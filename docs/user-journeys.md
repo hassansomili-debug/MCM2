@@ -2,7 +2,7 @@
 
 - `COMPANY_RESPONDENT`: signs in, sees only assigned assessments, autosaves, reviews, submits once, and views authorized completed results/reports.
 - `COMPANY_ADMIN`: manages company profile/controller consent, creates assessments, invites participants, submits their own assigned response, generates reports and updates roadmap work.
-- `CONSULTANT`: creates/repeats assessments, manages participant invitations, reads tenant results and generates reports; company-controller settings remain with the company admin.
+- `CONSULTANT`: creates/repeats assessments, works the consultation requests assigned to them, reads tenant results and generates reports; company-controller settings remain with the company admin.
 - `RESEARCHER`: uses only anonymized consent/origin-filtered research datasets, instrument lifecycle, statistics, quality and exports.
 - `SUPER_ADMIN`: manages platform users/roles/configuration, instrument governance, research operations and audited exports.
 
